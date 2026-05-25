@@ -90,12 +90,12 @@ func TestExtractEventStreamHeaderValue(t *testing.T) {
 
 	t.Run("find string header", func(t *testing.T) {
 		headers := buildStringHeader(":event-type", "chunk")
-		assert.Equal(t, "chunk", extractEventStreamHeaderValue(headers, ":event-type"))
+		assert.Equal(t, "chunk", extractAWSEventStreamHeader(headers, ":event-type"))
 	})
 
 	t.Run("header not found", func(t *testing.T) {
 		headers := buildStringHeader(":event-type", "chunk")
-		assert.Equal(t, "", extractEventStreamHeaderValue(headers, ":message-type"))
+		assert.Equal(t, "", extractAWSEventStreamHeader(headers, ":message-type"))
 	})
 
 	t.Run("multiple headers", func(t *testing.T) {
@@ -105,13 +105,13 @@ func TestExtractEventStreamHeaderValue(t *testing.T) {
 		_, _ = buf.Write(buildStringHeader(":message-type", "event"))
 
 		headers := buf.Bytes()
-		assert.Equal(t, "chunk", extractEventStreamHeaderValue(headers, ":event-type"))
-		assert.Equal(t, "application/json", extractEventStreamHeaderValue(headers, ":content-type"))
-		assert.Equal(t, "event", extractEventStreamHeaderValue(headers, ":message-type"))
+		assert.Equal(t, "chunk", extractAWSEventStreamHeader(headers, ":event-type"))
+		assert.Equal(t, "application/json", extractAWSEventStreamHeader(headers, ":content-type"))
+		assert.Equal(t, "event", extractAWSEventStreamHeader(headers, ":message-type"))
 	})
 
 	t.Run("empty headers", func(t *testing.T) {
-		assert.Equal(t, "", extractEventStreamHeaderValue([]byte{}, ":event-type"))
+		assert.Equal(t, "", extractAWSEventStreamHeader([]byte{}, ":event-type"))
 	})
 }
 
