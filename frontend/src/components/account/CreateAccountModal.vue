@@ -147,6 +147,25 @@
             <Icon name="cloud" size="sm" />
             Antigravity
           </button>
+          <button
+            type="button"
+            @click="form.platform = 'kiro'"
+            :class="[
+              'flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all',
+              form.platform === 'kiro'
+                ? 'bg-white text-cyan-600 shadow-sm dark:bg-dark-600 dark:text-cyan-400'
+                : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'
+            ]"
+          >
+            <svg
+              class="h-4 w-4"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+            >
+              <path d="M5 3h3v8.2L14.4 3h3.7l-7.1 8.6L18.6 21h-3.8l-6-9.2L8 13.5V21H5V3z" />
+            </svg>
+            Kiro
+          </button>
         </div>
       </div>
 
@@ -771,6 +790,133 @@
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.accounts.types.antigravityApikey') }}</span>
             </div>
           </button>
+        </div>
+      </div>
+
+      <!-- Kiro OAuth Credentials -->
+      <div v-if="form.platform === 'kiro'" class="space-y-4">
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.accessToken') }}</label>
+          <textarea
+            v-model="kiroAccessToken"
+            rows="3"
+            required
+            class="input font-mono text-xs"
+            :placeholder="t('admin.accounts.kiro.accessTokenPlaceholder')"
+          ></textarea>
+          <p class="input-hint">{{ t('admin.accounts.kiro.accessTokenHint') }}</p>
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.refreshToken') }}</label>
+          <textarea
+            v-model="kiroRefreshToken"
+            rows="3"
+            required
+            class="input font-mono text-xs"
+            :placeholder="t('admin.accounts.kiro.refreshTokenPlaceholder')"
+          ></textarea>
+          <p class="input-hint">{{ t('admin.accounts.kiro.refreshTokenHint') }}</p>
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.clientId') }}</label>
+          <input
+            v-model="kiroClientId"
+            type="text"
+            required
+            class="input font-mono"
+            :placeholder="t('admin.accounts.kiro.clientIdPlaceholder')"
+          />
+        </div>
+
+        <div>
+          <label class="input-label">{{ t('admin.accounts.kiro.clientSecret') }}</label>
+          <textarea
+            v-model="kiroClientSecret"
+            rows="4"
+            required
+            class="input font-mono text-xs"
+            :placeholder="t('admin.accounts.kiro.clientSecretPlaceholder')"
+          ></textarea>
+          <p class="input-hint">{{ t('admin.accounts.kiro.clientSecretHint') }}</p>
+        </div>
+
+        <div class="border-t border-gray-200 pt-3 dark:border-dark-600">
+          <button
+            type="button"
+            @click="showKiroAdvanced = !showKiroAdvanced"
+            class="flex items-center gap-2 text-sm text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200"
+          >
+            <svg
+              :class="['h-4 w-4 transition-transform', showKiroAdvanced ? 'rotate-90' : '']"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              stroke-width="2"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+            </svg>
+            <span>{{ showKiroAdvanced ? t('admin.accounts.kiro.hideAdvanced') : t('admin.accounts.kiro.showAdvanced') }}</span>
+          </button>
+
+          <div v-if="showKiroAdvanced" class="mt-3 space-y-4">
+            <div>
+              <label class="input-label">{{ t('admin.accounts.kiro.region') }}</label>
+              <select v-model="kiroRegion" class="input">
+                <option value="us-east-1">us-east-1 ({{ t('admin.accounts.kiro.regionDefault') }})</option>
+                <option value="eu-west-1">eu-west-1</option>
+                <option value="ap-northeast-1">ap-northeast-1</option>
+                <option value="custom">{{ t('admin.accounts.kiro.regionCustom') }}</option>
+              </select>
+              <input
+                v-if="kiroRegion === 'custom'"
+                v-model="kiroRegionCustom"
+                type="text"
+                class="input mt-2 font-mono"
+                :placeholder="t('admin.accounts.kiro.regionCustomPlaceholder')"
+              />
+            </div>
+
+            <div>
+              <label class="input-label">{{ t('admin.accounts.kiro.loginType') }}</label>
+              <select v-model="kiroLoginType" class="input">
+                <option value="builder">builder ({{ t('admin.accounts.kiro.loginTypeDefault') }})</option>
+                <option value="github">github</option>
+                <option value="google">google</option>
+                <option value="idc">idc</option>
+              </select>
+              <p class="input-hint">{{ t('admin.accounts.kiro.loginTypeHint') }}</p>
+            </div>
+
+            <div>
+              <label class="input-label">{{ t('admin.accounts.kiro.profileArn') }}</label>
+              <select v-model="kiroProfileArnPreset" class="input">
+                <option value="builder">arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX (Builder ID)</option>
+                <option value="github_google">arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK (Github/Google)</option>
+                <option value="custom">{{ t('admin.accounts.kiro.profileArnCustom') }}</option>
+              </select>
+              <input
+                v-if="kiroProfileArnPreset === 'custom'"
+                v-model="kiroProfileArnCustom"
+                type="text"
+                class="input mt-2 font-mono text-xs"
+                :placeholder="t('admin.accounts.kiro.profileArnCustomPlaceholder')"
+              />
+            </div>
+
+            <div>
+              <label class="input-label">{{ t('admin.accounts.kiro.machineId') }}</label>
+              <input
+                v-model="kiroMachineId"
+                type="text"
+                class="input font-mono"
+                :placeholder="t('admin.accounts.kiro.machineIdPlaceholder')"
+                maxlength="64"
+              />
+              <p class="input-hint">{{ t('admin.accounts.kiro.machineIdHint') }}</p>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -3390,6 +3536,19 @@ const antigravityMixedChannelConfirmed = ref(false)
 const showAdvancedOAuth = ref(false)
 const showGeminiHelpDialog = ref(false)
 
+// Kiro account fields
+const showKiroAdvanced = ref(false)
+const kiroAccessToken = ref('')
+const kiroRefreshToken = ref('')
+const kiroClientId = ref('')
+const kiroClientSecret = ref('')
+const kiroRegion = ref('us-east-1')
+const kiroRegionCustom = ref('')
+const kiroLoginType = ref<'builder' | 'github' | 'google' | 'idc'>('builder')
+const kiroProfileArnPreset = ref<'builder' | 'github_google' | 'custom'>('builder')
+const kiroProfileArnCustom = ref('')
+const kiroMachineId = ref('')
+
 // Quota control state (Anthropic OAuth/SetupToken only)
 const windowCostEnabled = ref(false)
 const windowCostLimit = ref<number | null>(null)
@@ -3543,6 +3702,10 @@ const isOAuthFlow = computed(() => {
   if (form.platform === 'anthropic' && accountCategory.value === 'bedrock') {
     return false
   }
+  // Kiro 直接填凭证，不走 OAuth 流程
+  if (form.platform === 'kiro') {
+    return false
+  }
   return accountCategory.value === 'oauth-based'
 })
 
@@ -3654,6 +3817,23 @@ watch(
       antigravityModelMappings.value = []
       antigravityModelRestrictionMode.value = 'mapping'
     }
+    // Kiro: 固定 oauth-based + type=oauth；切换到其他平台时清空 kiro 字段
+    if (newPlatform === 'kiro') {
+      accountCategory.value = 'oauth-based'
+      form.type = 'oauth'
+    } else {
+      kiroAccessToken.value = ''
+      kiroRefreshToken.value = ''
+      kiroClientId.value = ''
+      kiroClientSecret.value = ''
+      kiroRegion.value = 'us-east-1'
+      kiroRegionCustom.value = ''
+      kiroLoginType.value = 'builder'
+      kiroProfileArnPreset.value = 'builder'
+      kiroProfileArnCustom.value = ''
+      kiroMachineId.value = ''
+      showKiroAdvanced.value = false
+    }
     if (newPlatform !== 'gemini' && newPlatform !== 'anthropic' && accountCategory.value === 'service_account') {
       accountCategory.value = 'oauth-based'
     }
@@ -3694,6 +3874,16 @@ watch(
     antigravityOAuth.resetState()
   }
 )
+
+// Kiro: loginType 改变时联动 profileArn 默认值
+watch(kiroLoginType, (newType) => {
+  if (newType === 'builder') {
+    kiroProfileArnPreset.value = 'builder'
+  } else if (newType === 'github' || newType === 'google') {
+    kiroProfileArnPreset.value = 'github_google'
+  }
+  // idc 不强制切换，保持当前
+})
 
 // Gemini AI Studio OAuth availability (requires operator-configured OAuth client)
 watch(
@@ -4118,6 +4308,18 @@ const resetForm = () => {
   openaiOAuth.resetState()
   geminiOAuth.resetState()
   antigravityOAuth.resetState()
+  // Reset Kiro fields
+  showKiroAdvanced.value = false
+  kiroAccessToken.value = ''
+  kiroRefreshToken.value = ''
+  kiroClientId.value = ''
+  kiroClientSecret.value = ''
+  kiroRegion.value = 'us-east-1'
+  kiroRegionCustom.value = ''
+  kiroLoginType.value = 'builder'
+  kiroProfileArnPreset.value = 'builder'
+  kiroProfileArnCustom.value = ''
+  kiroMachineId.value = ''
   oauthFlowRef.value?.reset()
   antigravityMixedChannelConfirmed.value = false
   clearMixedChannelDialog()
@@ -4297,6 +4499,58 @@ const handleSubmit = async () => {
       return
     }
     step.value = 2
+    return
+  }
+
+  // For Kiro type, create directly with OAuth credentials
+  if (form.platform === 'kiro') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!kiroAccessToken.value.trim()) {
+      appStore.showError(t('admin.accounts.kiro.accessTokenRequired'))
+      return
+    }
+    if (!kiroRefreshToken.value.trim()) {
+      appStore.showError(t('admin.accounts.kiro.refreshTokenRequired'))
+      return
+    }
+    if (!kiroClientId.value.trim()) {
+      appStore.showError(t('admin.accounts.kiro.clientIdRequired'))
+      return
+    }
+    if (!kiroClientSecret.value.trim()) {
+      appStore.showError(t('admin.accounts.kiro.clientSecretRequired'))
+      return
+    }
+
+    const effectiveRegion = kiroRegion.value === 'custom'
+      ? (kiroRegionCustom.value.trim() || 'us-east-1')
+      : kiroRegion.value
+
+    const effectiveProfileArn = kiroProfileArnPreset.value === 'custom'
+      ? kiroProfileArnCustom.value.trim()
+      : kiroProfileArnPreset.value === 'builder'
+        ? 'arn:aws:codewhisperer:us-east-1:638616132270:profile/AAAACCCCXXXX'
+        : 'arn:aws:codewhisperer:us-east-1:699475941385:profile/EHGA3GRVQMUK'
+
+    const credentials: Record<string, unknown> = {
+      access_token: kiroAccessToken.value.trim(),
+      refresh_token: kiroRefreshToken.value.trim(),
+      client_id: kiroClientId.value.trim(),
+      client_secret: kiroClientSecret.value.trim(),
+      region: effectiveRegion,
+      login_type: kiroLoginType.value,
+    }
+    if (effectiveProfileArn) {
+      credentials.profile_arn = effectiveProfileArn
+    }
+    if (kiroMachineId.value.trim()) {
+      credentials.machine_id = kiroMachineId.value.trim()
+    }
+
+    await createAccountAndFinish('kiro', 'oauth' as AccountType, credentials)
     return
   }
 

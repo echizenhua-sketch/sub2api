@@ -81,6 +81,8 @@ const hasRecoverableState = computed(() => {
 })
 const isAntigravityOAuth = computed(() => props.account?.platform === 'antigravity' && props.account?.type === 'oauth')
 const isOpenAIOAuth = computed(() => props.account?.platform === 'openai' && props.account?.type === 'oauth')
+const isKiroOAuth = computed(() => props.account?.platform === 'kiro' && props.account?.type === 'oauth')
+void isKiroOAuth // reserved for Phase 2 token refresh menu / Phase 6 test-connection wiring
 const supportsPrivacy = computed(() => isAntigravityOAuth.value || isOpenAIOAuth.value)
 const hasQuotaLimit = computed(() => {
   return (props.account?.type === 'apikey' || props.account?.type === 'bedrock') && (
