@@ -67,6 +67,7 @@ type AccountTestService struct {
 	geminiTokenProvider       *GeminiTokenProvider
 	claudeTokenProvider       *ClaudeTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
+	kiroOAuthService          *KiroOAuthService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
@@ -78,6 +79,7 @@ func NewAccountTestService(
 	geminiTokenProvider *GeminiTokenProvider,
 	claudeTokenProvider *ClaudeTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
+	kiroOAuthService *KiroOAuthService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
@@ -87,6 +89,7 @@ func NewAccountTestService(
 		geminiTokenProvider:       geminiTokenProvider,
 		claudeTokenProvider:       claudeTokenProvider,
 		antigravityGatewayService: antigravityGatewayService,
+		kiroOAuthService:          kiroOAuthService,
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
@@ -192,7 +195,61 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.routeAntigravityTest(c, account, modelID, prompt)
 	}
 
+	if account.IsKiro() {
+		return s.testKiroAccountConnection(c, account, modelID)
+	}
+
 	return s.testClaudeAccountConnection(c, account, modelID)
+}
+
+// testKiroAccountConnection 验证 Kiro/CodeWhisperer 账号是否还可用
+//
+// Phase 6 MVP 实现：用 access_token 调一次 OIDC token introspection 端点不可行
+// （AWS OIDC 不公开 introspection），所以改成最简检查：
+//   1. credentials 里 access_token / refresh_token 都不为空
+//   2. 调用 KiroOAuthService.RefreshAccountToken 刷一次，确认凭证仍可换出新 token
+//      失败时 endpoint 会返回 4xx，连通性测试也算失败
+//
+// 比直接调 generateAssistantResponse 更轻量，且不消耗用户配额。
+func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	if account == nil {
+		return s.sendErrorAndEnd(c, "Kiro account is nil")
+	}
+	if strings.TrimSpace(account.GetCredential("access_token")) == "" {
+		return s.sendErrorAndEnd(c, "Kiro account is missing access_token")
+	}
+	if strings.TrimSpace(account.GetCredential("refresh_token")) == "" {
+		return s.sendErrorAndEnd(c, "Kiro account is missing refresh_token")
+	}
+
+	if s.kiroOAuthService == nil {
+		// 没注入 service 时降级为只检字段是否齐全
+		_ = c.JSON
+		return nil
+	}
+
+	tokenInfo, err := s.kiroOAuthService.RefreshAccountToken(c.Request.Context(), account)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Kiro refresh failed: %v", err))
+	}
+	if tokenInfo == nil || tokenInfo.AccessToken == "" {
+		return s.sendErrorAndEnd(c, "Kiro refresh returned empty access_token")
+	}
+
+	// 把刷新结果写回 DB（与 anthropic OAuth 测试连接的副作用一致：测试本身就续期）
+	newCreds := s.kiroOAuthService.BuildAccountCredentials(tokenInfo)
+	merged := MergeCredentials(account.Credentials, newCreds)
+	if err := persistAccountCredentials(c.Request.Context(), s.accountRepo, account, merged); err != nil {
+		// 刷新成功了，写入失败只记日志，不影响测试结论
+		_ = err
+	}
+
+	_ = modelID // model 不影响测试结果
+	c.JSON(200, map[string]any{
+		"ok":      true,
+		"message": "Kiro account is reachable; access_token refreshed",
+	})
+	return nil
 }
 
 // testClaudeAccountConnection tests an Anthropic Claude account's connection

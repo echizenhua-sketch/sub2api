@@ -4371,6 +4371,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		})
 	}
 
+	if account != nil && account.IsKiro() {
+		return s.forwardKiro(ctx, c, account, parsed, startTime)
+	}
+
 	if account != nil && account.IsBedrock() {
 		return s.forwardBedrock(ctx, c, account, parsed, startTime)
 	}
