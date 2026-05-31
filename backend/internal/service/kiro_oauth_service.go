@@ -158,6 +158,8 @@ func (s *KiroOAuthService) BuildAccountCredentials(tokenInfo *KiroTokenInfo) map
 	creds := map[string]any{
 		"access_token": tokenInfo.AccessToken,
 		"expires_at":   strconv.FormatInt(tokenInfo.ExpiresAt, 10),
+		// last_refreshed_at 记录本次刷新时间（Unix 秒），供固定周期强制刷新判断使用。
+		"last_refreshed_at": strconv.FormatInt(time.Now().Unix(), 10),
 	}
 	if tokenInfo.RefreshToken != "" {
 		creds["refresh_token"] = tokenInfo.RefreshToken

@@ -16,7 +16,7 @@ services:
   # Sub2API Application
   # ===========================================================================
   sub2api:
-    image: weishaw/sub2api:latest
+    image: sub2api-kiro:local
     container_name: sub2api
     restart: unless-stopped
     ulimits:
@@ -143,6 +143,9 @@ services:
       # Proxy for accessing GitHub (online updates + pricing data)
       # Examples: http://host:port, socks5://host:port
       - UPDATE_PROXY_URL=${UPDATE_PROXY_URL:-}
+      - PRICING_REMOTE_URL=${PRICING_REMOTE_URL:-}
+      - PRICING_HASH_URL=${PRICING_HASH_URL:-}
+      - KIRO_REFRESH_FORCE_INTERVAL_MINUTES=${KIRO_REFRESH_FORCE_INTERVAL_MINUTES:-0}
 
       # =======================================================================
       # Image Generation Stream & Concurrency

@@ -66,7 +66,8 @@ func NewTokenRefreshService(
 	claudeRefresher := NewClaudeTokenRefresher(oauthService)
 	geminiRefresher := NewGeminiTokenRefresher(geminiOAuthService)
 	agRefresher := NewAntigravityTokenRefresher(antigravityOAuthService)
-	kiroRefresher := NewKiroTokenRefresher(kiroOAuthService)
+	kiroForceInterval := time.Duration(cfg.KiroRefresh.ForceIntervalMinutes) * time.Minute
+	kiroRefresher := NewKiroTokenRefresher(kiroOAuthService, kiroForceInterval)
 
 	// 注册平台特定的刷新器（TokenRefresher 接口）
 	s.refreshers = []TokenRefresher{

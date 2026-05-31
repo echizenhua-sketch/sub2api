@@ -183,6 +183,7 @@ type UsageInfo struct {
 	FiveHour           *UsageProgress `json:"five_hour"`                      // 5小时窗口
 	SevenDay           *UsageProgress `json:"seven_day,omitempty"`            // 7天窗口
 	SevenDaySonnet     *UsageProgress `json:"seven_day_sonnet,omitempty"`     // 7天Sonnet窗口
+	KiroUsage          *UsageProgress `json:"kiro_usage,omitempty"`          // Kiro 用量窗口（AGENTIC_REQUEST）
 	GeminiSharedDaily  *UsageProgress `json:"gemini_shared_daily,omitempty"`  // Gemini shared pool RPD (Google One / Code Assist)
 	GeminiProDaily     *UsageProgress `json:"gemini_pro_daily,omitempty"`     // Gemini Pro 日配额
 	GeminiFlashDaily   *UsageProgress `json:"gemini_flash_daily,omitempty"`   // Gemini Flash 日配额
@@ -313,6 +314,15 @@ func (s *AccountUsageService) GetUsage(ctx context.Context, accountID int64, for
 
 	if account.Platform == PlatformGemini {
 		usage, err := s.getGeminiUsage(ctx, account)
+		if err == nil {
+			s.tryClearRecoverableAccountError(ctx, account)
+		}
+		return usage, err
+	}
+
+	// Kiro 平台：调用 getUsageLimits REST API 获取用量
+	if account.Platform == PlatformKiro {
+		usage, err := s.getKiroUsage(ctx, account)
 		if err == nil {
 			s.tryClearRecoverableAccountError(ctx, account)
 		}
@@ -1339,4 +1349,42 @@ func buildGeminiUsageProgress(used, limit int64, resetAt time.Time, tokens int64
 // 用于账号列表页面显示当前窗口费用
 func (s *AccountUsageService) GetAccountWindowStats(ctx context.Context, accountID int64, startTime time.Time) (*usagestats.AccountStats, error) {
 	return s.usageLogRepo.GetAccountWindowStats(ctx, accountID, startTime)
+}
+
+
+// getKiroUsage 获取 kiro 账号用量（getUsageLimits REST API）。
+// kiroOAuthService 无状态，按需创建；token 过期由后台 KiroTokenRefresher 处理，
+// 这里若遇 401 返回降级信息而非报错。
+func (s *AccountUsageService) getKiroUsage(ctx context.Context, account *Account) (*UsageInfo, error) {
+	now := time.Now()
+	if strings.TrimSpace(account.GetCredential("access_token")) == "" {
+		return &UsageInfo{UpdatedAt: &now, Error: "kiro: 无 access_token，等待后台刷新"}, nil
+	}
+
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	kiroSvc := NewKiroOAuthService()
+	ku, err := kiroSvc.FetchUsageLimits(fetchCtx, account)
+	if err != nil {
+		degraded := &UsageInfo{UpdatedAt: &now, Error: "获取 kiro 用量失败: " + err.Error()}
+		enrichUsageWithAccountError(degraded, account)
+		return degraded, nil
+	}
+
+	usage := &UsageInfo{
+		Source:    "active",
+		UpdatedAt: &now,
+		KiroUsage: &UsageProgress{
+			Utilization:   ku.Utilization,
+			ResetsAt:      ku.ResetsAt,
+			UsedRequests:  int64(ku.CurrentUsage),
+			LimitRequests: int64(ku.UsageLimit),
+		},
+		SubscriptionTier: ku.SubscriptionType,
+	}
+	if ku.ResetsAt != nil {
+		usage.KiroUsage.RemainingSeconds = int(time.Until(*ku.ResetsAt).Seconds())
+	}
+	return usage, nil
 }

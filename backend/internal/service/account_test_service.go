@@ -212,6 +212,13 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 //
 // 比直接调 generateAssistantResponse 更轻量，且不消耗用户配额。
 func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	// 设置 SSE 响应头（与其他平台测试一致）；必须在写任何 body 前设置。
+	c.Writer.Header().Set("Content-Type", "text/event-stream") // kiro
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
 	if account == nil {
 		return s.sendErrorAndEnd(c, "Kiro account is nil")
 	}
@@ -245,10 +252,12 @@ func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *
 	}
 
 	_ = modelID // model 不影响测试结果
-	c.JSON(200, map[string]any{
-		"ok":      true,
-		"message": "Kiro account is reachable; access_token refreshed",
-	})
+
+	// 与其他平台一致，通过 SSE 事件返回结果，前端按 test_start/content/test_complete 解析。
+	// 此前用 c.JSON 直接返回普通 JSON，前端等不到 test_complete 事件而一直转圈。
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Kiro account is reachable; access_token refreshed"})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }
 
