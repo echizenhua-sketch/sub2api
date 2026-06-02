@@ -15,6 +15,7 @@ import (
 // KiroImportRequest 是 kiro 账号批量导入请求。
 // Data 支持两种格式（自动识别）：
 //   - JSON 数组：[{"email","refresh_token","client_id","client_secret","region","login_type","machine_id"}...]
+//   - Kiro manage 导出包：{"accounts":[{"email","machineId","credentials":{"refreshToken","clientId","clientSecret"...}}...]}
 //   - 卡密文本：每行 邮箱----密码----RefreshToken----ClientId----ClientSecret，分隔符支持 ----、Tab、连续空格
 type KiroImportRequest struct {
 	Data                    string   `json:"data"`
@@ -43,6 +44,7 @@ type KiroImportItem struct {
 	LoginType    string `json:"login_type"`
 	MachineID    string `json:"machine_id"`
 	ProfileArn   string `json:"profile_arn"`
+	Extra        map[string]any
 }
 
 type kiroImportEntry struct {
@@ -52,10 +54,10 @@ type kiroImportEntry struct {
 
 // KiroImportResult 是批量导入的汇总结果。
 type KiroImportResult struct {
-	Total   int                     `json:"total"`
-	Created int                     `json:"created"`
-	Skipped int                     `json:"skipped"`
-	Failed  int                     `json:"failed"`
+	Total   int                      `json:"total"`
+	Created int                      `json:"created"`
+	Skipped int                      `json:"skipped"`
+	Failed  int                      `json:"failed"`
 	Errors  []KiroImportErrorMessage `json:"errors,omitempty"`
 }
 
@@ -120,7 +122,7 @@ func parseKiroImportEntries(req KiroImportRequest) ([]kiroImportEntry, error) {
 
 	entries := make([]kiroImportEntry, 0)
 
-	// 优先尝试 JSON（数组或单对象）。
+	// 优先尝试 JSON（Sub2API 数组/单对象，或 Kiro manage 导出包）。
 	var rawList []map[string]any
 	if strings.HasPrefix(trimmed, "[") {
 		if err := json.Unmarshal([]byte(trimmed), &rawList); err != nil {
@@ -131,7 +133,7 @@ func parseKiroImportEntries(req KiroImportRequest) ([]kiroImportEntry, error) {
 		if err := json.Unmarshal([]byte(trimmed), &single); err != nil {
 			return nil, fmt.Errorf("JSON 解析失败: %v", err)
 		}
-		rawList = []map[string]any{single}
+		rawList = expandKiroImportJSONObjects(single)
 	}
 
 	if rawList != nil {
@@ -193,7 +195,42 @@ func getPart(parts []string, i int) string {
 	return ""
 }
 
+func expandKiroImportJSONObjects(raw map[string]any) []map[string]any {
+	if accounts, ok := raw["accounts"]; ok {
+		if list := mapSliceFromAny(accounts); len(list) > 0 {
+			return list
+		}
+	}
+	return []map[string]any{raw}
+}
+
+func mapSliceFromAny(value any) []map[string]any {
+	switch v := value.(type) {
+	case []any:
+		list := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				list = append(list, m)
+			}
+		}
+		return list
+	case []map[string]any:
+		return v
+	case map[string]any:
+		list := make([]map[string]any, 0, len(v))
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				list = append(list, m)
+			}
+		}
+		return list
+	default:
+		return nil
+	}
+}
+
 func kiroItemFromJSON(raw map[string]any, defaultLoginType, defaultRegion string) KiroImportItem {
+	credentials := mapFromAny(raw["credentials"])
 	item := KiroImportItem{
 		Email:        firstStringKey(raw, "email", "_email"),
 		Password:     firstStringKey(raw, "password"),
@@ -206,11 +243,38 @@ func kiroItemFromJSON(raw map[string]any, defaultLoginType, defaultRegion string
 		MachineID:    firstStringKey(raw, "machine_id", "machineId"),
 		ProfileArn:   firstStringKey(raw, "profile_arn", "profileArn"),
 	}
+	if credentials != nil {
+		item.AccessToken = firstKiroImportNonEmpty(item.AccessToken, firstStringKey(credentials, "access_token", "accessToken"))
+		item.RefreshToken = firstKiroImportNonEmpty(item.RefreshToken, firstStringKey(credentials, "refresh_token", "refreshToken"))
+		item.ClientID = firstKiroImportNonEmpty(item.ClientID, firstStringKey(credentials, "client_id", "clientId"))
+		item.ClientSecret = firstKiroImportNonEmpty(item.ClientSecret, firstStringKey(credentials, "client_secret", "clientSecret"))
+		item.Region = firstKiroImportNonEmpty(item.Region, firstStringKey(credentials, "region"))
+		item.LoginType = firstKiroImportNonEmpty(item.LoginType, firstStringKey(credentials, "login_type", "loginType", "authMethod", "provider"))
+		item.MachineID = firstKiroImportNonEmpty(item.MachineID, firstStringKey(credentials, "machine_id", "machineId"))
+		item.ProfileArn = firstKiroImportNonEmpty(item.ProfileArn, firstStringKey(credentials, "profile_arn", "profileArn"))
+	}
+	item.Extra = buildKiroManageExtra(raw, credentials)
 	item.LoginType = normalizeKiroLoginType(item.LoginType, defaultLoginType)
 	if item.Region == "" {
 		item.Region = defaultRegion
 	}
 	return item
+}
+
+func mapFromAny(value any) map[string]any {
+	if m, ok := value.(map[string]any); ok {
+		return m
+	}
+	return nil
+}
+
+func firstKiroImportNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // normalizeKiroLoginType 把 kiro-account-manager 的 provider/authMethod 归一到 sub2api 的 login_type。
@@ -249,6 +313,52 @@ func firstStringKey(raw map[string]any, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+func buildKiroManageExtra(raw, credentials map[string]any) map[string]any {
+	if raw == nil {
+		return nil
+	}
+	manage := make(map[string]any)
+	copyStringExtra(manage, raw, "id", "id")
+	copyStringExtra(manage, raw, "user_id", "userId")
+	copyStringExtra(manage, raw, "idp", "idp")
+	copyStringExtra(manage, raw, "status", "status")
+	copyStringExtra(manage, raw, "tags", "tags")
+	copyStringExtra(manage, raw, "created_at", "createdAt")
+	copyStringExtra(manage, raw, "last_used_at", "lastUsedAt")
+	copyStringExtra(manage, raw, "last_checked_at", "lastCheckedAt")
+	copyStringExtra(manage, raw, "machine_id", "machineId")
+	copyStringExtra(manage, credentials, "auth_method", "authMethod")
+	copyStringExtra(manage, credentials, "provider", "provider")
+	copyStringExtra(manage, credentials, "csrf_token", "csrfToken")
+	copyStringExtra(manage, credentials, "credentials_expires_at", "expiresAt")
+	copyObjectExtra(manage, raw, "subscription", "subscription")
+	copyObjectExtra(manage, raw, "usage", "usage")
+	if len(manage) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"kiro_manage": manage,
+	}
+}
+
+func copyStringExtra(dst map[string]any, src map[string]any, dstKey, srcKey string) {
+	if src == nil {
+		return
+	}
+	if value := firstStringKey(src, srcKey); value != "" {
+		dst[dstKey] = value
+	}
+}
+
+func copyObjectExtra(dst map[string]any, src map[string]any, dstKey, srcKey string) {
+	if src == nil {
+		return
+	}
+	if value, ok := src[srcKey]; ok && value != nil {
+		dst[dstKey] = value
+	}
 }
 
 func (h *AccountHandler) importKiroAccounts(ctx context.Context, req KiroImportRequest, entries []kiroImportEntry) (KiroImportResult, error) {
@@ -335,6 +445,7 @@ func (h *AccountHandler) importKiroAccounts(ctx context.Context, req KiroImportR
 			Platform:              service.PlatformKiro,
 			Type:                  service.AccountTypeOAuth,
 			Credentials:           credentials,
+			Extra:                 item.Extra,
 			ProxyID:               req.ProxyID,
 			Concurrency:           concurrency,
 			Priority:              priority,

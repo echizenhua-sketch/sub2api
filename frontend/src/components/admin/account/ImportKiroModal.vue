@@ -8,7 +8,7 @@
   >
     <form id="import-kiro-form" class="space-y-4" @submit.prevent="handleImport">
       <div class="text-sm text-gray-600 dark:text-dark-300">
-        支持上传文件或直接粘贴。两种格式自动识别：JSON 数组，或卡密格式
+        支持上传文件或直接粘贴。自动识别 Kiro manage 导出 JSON、Sub2API JSON 数组，或卡密格式
         <code>邮箱----密码----RefreshToken----ClientId----ClientSecret</code>（分隔符支持 ----、Tab、连续空格，每行一个账号）。
       </div>
       <div
@@ -39,7 +39,9 @@
             <div class="truncate text-sm text-gray-700 dark:text-dark-200">
               {{ fileName || '可选择 .txt / .json / .csv 文件，内容将填入下方文本框' }}
             </div>
-            <div class="text-xs text-gray-500 dark:text-dark-400">支持卡密格式或 JSON 数组</div>
+            <div class="text-xs text-gray-500 dark:text-dark-400">
+              支持 Kiro manage 导出包、Sub2API JSON 数组、卡密格式
+            </div>
           </div>
           <button type="button" class="btn btn-secondary shrink-0" @click="openFilePicker">
             选择文件
@@ -60,11 +62,41 @@
           v-model="rawData"
           rows="10"
           class="input font-mono text-xs"
-          placeholder="示例（卡密格式，每行一个）：&#10;user@example.com----password----RT_xxx----CID_xxx----CSEC_xxx&#10;&#10;或 JSON 数组：&#10;[{&quot;email&quot;:&quot;a@b.com&quot;,&quot;refresh_token&quot;:&quot;...&quot;,&quot;client_id&quot;:&quot;...&quot;,&quot;client_secret&quot;:&quot;...&quot;,&quot;login_type&quot;:&quot;builder&quot;}]"
+          placeholder="Kiro manage 导出包可直接上传：{&quot;accounts&quot;:[{&quot;email&quot;:&quot;a@b.com&quot;,&quot;machineId&quot;:&quot;...&quot;,&quot;credentials&quot;:{&quot;refreshToken&quot;:&quot;...&quot;,&quot;clientId&quot;:&quot;...&quot;,&quot;clientSecret&quot;:&quot;...&quot;,&quot;authMethod&quot;:&quot;IdC&quot;}}]}&#10;&#10;Sub2API JSON 数组：[{&quot;email&quot;:&quot;a@b.com&quot;,&quot;refresh_token&quot;:&quot;...&quot;,&quot;client_id&quot;:&quot;...&quot;,&quot;client_secret&quot;:&quot;...&quot;,&quot;login_type&quot;:&quot;builder&quot;}]&#10;&#10;卡密格式：user@example.com----password----RT_xxx----CID_xxx----CSEC_xxx"
         ></textarea>
         <p v-if="lineCount > 0" class="mt-1 text-xs text-gray-500 dark:text-dark-400">
           当前约 {{ lineCount }} 行待导入
         </p>
+      </div>
+
+      <div
+        v-if="preview"
+        class="space-y-3 rounded-xl border border-gray-200 p-4 text-sm dark:border-dark-700"
+      >
+        <div class="flex flex-wrap items-center justify-between gap-2">
+          <div class="font-medium text-gray-900 dark:text-white">字段映射预览</div>
+          <div class="text-xs text-gray-500 dark:text-dark-400">
+            {{ preview.source }} · {{ preview.count }} 条
+          </div>
+        </div>
+        <div class="grid gap-2 sm:grid-cols-2">
+          <div
+            v-for="field in preview.fields"
+            :key="field.name"
+            class="rounded-lg bg-gray-50 px-3 py-2 dark:bg-dark-800"
+          >
+            <div class="text-xs text-gray-500 dark:text-dark-400">{{ field.name }}</div>
+            <div class="mt-1 truncate font-mono text-xs text-gray-800 dark:text-dark-100">
+              {{ field.value }}
+            </div>
+          </div>
+        </div>
+        <div
+          v-if="preview.extraFields.length"
+          class="text-xs text-gray-500 dark:text-dark-400"
+        >
+          Kiro 独有字段将保留到 <code>extra.kiro_manage</code>：{{ preview.extraFields.join('、') }}
+        </div>
       </div>
 
       <div
@@ -136,14 +168,102 @@ const fileName = ref('')
 
 const errorItems = computed(() => result.value?.errors || [])
 
+interface PreviewField {
+  name: string
+  value: string
+}
+
+interface ImportPreview {
+  source: string
+  count: number
+  fields: PreviewField[]
+  extraFields: string[]
+}
+
+const secretText = (value: unknown) => {
+  if (value === null || value === undefined || String(value).trim() === '') return '未提供'
+  return '已提供'
+}
+
+const textValue = (value: unknown) => {
+  if (value === null || value === undefined || String(value).trim() === '') return '未提供'
+  return String(value)
+}
+
+const normalizeLoginType = (value: unknown) => {
+  const raw = String(value || '').trim().toLowerCase()
+  if (!raw) return defaultLoginType.value || 'builder'
+  if (raw === 'builderid' || raw === 'enterprise') return 'builder'
+  if (raw === 'social') return 'github'
+  return raw
+}
+
+const preview = computed<ImportPreview | null>(() => {
+  const text = rawData.value.trim()
+  if (!text || !(text.startsWith('{') || text.startsWith('['))) return null
+
+  try {
+    const parsed = JSON.parse(text)
+    const accounts = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.accounts)
+        ? parsed.accounts
+        : parsed && typeof parsed === 'object'
+          ? [parsed]
+          : []
+    if (!accounts.length) return null
+
+    const first = accounts[0] || {}
+    const credentials = first.credentials || {}
+    const source = !Array.isArray(parsed) && Array.isArray(parsed?.accounts)
+      ? 'Kiro manage 导出包'
+      : 'Sub2API JSON'
+    const fields: PreviewField[] = [
+      { name: 'email', value: textValue(first.email || first._email) },
+      { name: 'access_token', value: secretText(first.access_token || first.accessToken || credentials.access_token || credentials.accessToken) },
+      { name: 'refresh_token', value: secretText(first.refresh_token || first.refreshToken || credentials.refresh_token || credentials.refreshToken) },
+      { name: 'client_id', value: secretText(first.client_id || first.clientId || credentials.client_id || credentials.clientId) },
+      { name: 'client_secret', value: secretText(first.client_secret || first.clientSecret || credentials.client_secret || credentials.clientSecret) },
+      { name: 'region', value: textValue(first.region || credentials.region || 'us-east-1') },
+      { name: 'login_type', value: normalizeLoginType(first.login_type || first.loginType || first.authMethod || first.provider || credentials.login_type || credentials.loginType || credentials.authMethod || credentials.provider) },
+      { name: 'machine_id', value: secretText(first.machine_id || first.machineId || credentials.machine_id || credentials.machineId) }
+    ]
+    const extraCandidates = [
+      ['idp', first.idp],
+      ['subscription', first.subscription],
+      ['usage', first.usage],
+      ['tags', first.tags],
+      ['user_id', first.userId],
+      ['created_at', first.createdAt],
+      ['last_used_at', first.lastUsedAt],
+      ['last_checked_at', first.lastCheckedAt],
+      ['csrf_token', credentials.csrfToken],
+      ['credentials_expires_at', credentials.expiresAt]
+    ]
+    const extraFields = extraCandidates
+      .filter(([, value]) => value !== undefined && value !== null && String(value).trim() !== '')
+      .map(([name]) => String(name))
+    return {
+      source,
+      count: accounts.length,
+      fields,
+      extraFields
+    }
+  } catch {
+    return null
+  }
+})
+
 const lineCount = computed(() => {
   const text = rawData.value.trim()
   if (!text) return 0
-  // JSON 数组：尝试统计元素数
-  if (text.startsWith('[')) {
+  // JSON：尝试统计数组或 Kiro manage accounts 数量
+  if (text.startsWith('[') || text.startsWith('{')) {
     try {
-      const arr = JSON.parse(text)
-      return Array.isArray(arr) ? arr.length : 1
+      const data = JSON.parse(text)
+      if (Array.isArray(data)) return data.length
+      if (Array.isArray(data?.accounts)) return data.accounts.length
+      return 1
     } catch {
       return 0
     }
