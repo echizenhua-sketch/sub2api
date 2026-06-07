@@ -46,7 +46,7 @@ func (s *GatewayService) forwardKiro(
 
 	endpoint := kiroPrimaryEndpoint()
 
-	payload, registry, err := AnthropicToKiroWithRegistry(body, account, endpoint)
+	payload, registry, err := AnthropicToKiroWithRegistry(body.Bytes(), account, endpoint)
 	if err != nil {
 		return nil, fmt.Errorf("forwardKiro: translate request: %w", err)
 	}
