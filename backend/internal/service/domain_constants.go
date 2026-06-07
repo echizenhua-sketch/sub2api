@@ -335,6 +335,9 @@ const (
 
 	// SettingKeyOpsAlertRuntimeSettings stores JSON config for ops alert evaluator runtime settings.
 	SettingKeyOpsAlertRuntimeSettings = "ops_alert_runtime_settings"
+	// 账号错误处理规则（全局）：命中错误码（可选关键词）即临时拉黑该账号 N 分钟。
+	SettingKeyAccountTempUnschedulableRules         = "account_temp_unschedulable_rules"          // 全局规则列表（JSON 数组）
+	SettingKeyAccountTempUnschedulableGlobalEnabled = "account_temp_unschedulable_global_enabled" // 全局规则总开关
 
 	// SettingKeyOpsMetricsIntervalSeconds controls the ops metrics collector interval (>=60).
 	SettingKeyOpsMetricsIntervalSeconds = "ops_metrics_interval_seconds"

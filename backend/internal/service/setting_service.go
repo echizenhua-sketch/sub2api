@@ -4889,3 +4889,55 @@ func mergePlatformQuotaDefaults(dst, src *DefaultPlatformQuotaSetting) {
 		dst.MonthlyLimitUSD = src.MonthlyLimitUSD
 	}
 }
+
+// GlobalTempUnschedulableConfig 全局账号错误处理规则配置。
+type GlobalTempUnschedulableConfig struct {
+	Enabled bool                    `json:"enabled"`
+	Rules   []TempUnschedulableRule `json:"rules"`
+}
+
+// GetGlobalTempUnschedulableRules 读取全局账号错误处理规则（总开关 + 规则列表）。
+// 失败或未配置时返回 Enabled=false、空规则（fail-open：不影响正常调度）。
+func (s *SettingService) GetGlobalTempUnschedulableRules(ctx context.Context) GlobalTempUnschedulableConfig {
+	vals, err := s.settingRepo.GetMultiple(ctx, []string{
+		SettingKeyAccountTempUnschedulableGlobalEnabled,
+		SettingKeyAccountTempUnschedulableRules,
+	})
+	if err != nil {
+		return GlobalTempUnschedulableConfig{}
+	}
+	cfg := GlobalTempUnschedulableConfig{
+		Enabled: vals[SettingKeyAccountTempUnschedulableGlobalEnabled] == "true",
+	}
+	raw := strings.TrimSpace(vals[SettingKeyAccountTempUnschedulableRules])
+	if raw != "" {
+		var rules []TempUnschedulableRule
+		if jsonErr := json.Unmarshal([]byte(raw), &rules); jsonErr == nil {
+			cfg.Rules = rules
+		}
+	}
+	return cfg
+}
+
+// SetGlobalTempUnschedulableRules 写入全局账号错误处理规则。
+func (s *SettingService) SetGlobalTempUnschedulableRules(ctx context.Context, cfg GlobalTempUnschedulableConfig) error {
+	rulesJSON, err := json.Marshal(cfg.Rules)
+	if err != nil {
+		return err
+	}
+	enabled := "false"
+	if cfg.Enabled {
+		enabled = "true"
+	}
+	updates := map[string]string{
+		SettingKeyAccountTempUnschedulableGlobalEnabled: enabled,
+		SettingKeyAccountTempUnschedulableRules:         string(rulesJSON),
+	}
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
+	}
+	if s.onUpdate != nil {
+		s.onUpdate()
+	}
+	return nil
+}

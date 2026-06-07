@@ -6617,6 +6617,10 @@
         <!-- /Tab: Email -->
 
         <!-- Tab: Backup -->
+        <div v-show="activeTab === 'errorRules'" class="space-y-6">
+          <AccountErrorRulesPanel />
+        </div>
+
         <div v-show="activeTab === 'backup'">
           <BackupSettings />
         </div>
@@ -6693,6 +6697,7 @@
 </template>
 
 <script setup lang="ts">
+import AccountErrorRulesPanel from "@/components/admin/AccountErrorRulesPanel.vue";
 import { ref, reactive, computed, onMounted, watch } from "vue";
 import { useI18n } from "vue-i18n";
 import { adminAPI } from "@/api";
@@ -6782,6 +6787,7 @@ type SettingsTab =
   | "gateway"
   | "payment"
   | "email"
+  | "errorRules"
   | "backup";
 const activeTab = ref<SettingsTab>("general");
 const settingsTabs = [
@@ -6793,6 +6799,7 @@ const settingsTabs = [
   { key: "gateway" as SettingsTab, icon: "server" as const },
   { key: "payment" as SettingsTab, icon: "creditCard" as const },
   { key: "email" as SettingsTab, icon: "mail" as const },
+  { key: "errorRules" as SettingsTab, icon: "shield" as const },
   { key: "backup" as SettingsTab, icon: "database" as const },
 ];
 
