@@ -3045,6 +3045,7 @@ export default {
       dataImportButton: 'Start Import',
       dataImporting: 'Importing...',
       dataImportSelectFile: 'Please select a data file',
+      dataImportSelectedFiles: '{count} JSON files selected',
       dataImportParseFailed: 'Failed to parse data file',
       dataImportFailed: 'Data import failed',
       dataImportResult: 'Import Result',
