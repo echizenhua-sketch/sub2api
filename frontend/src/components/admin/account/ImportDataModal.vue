@@ -161,6 +161,52 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
   })
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const stringField = (record: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
+const hasCodexTokenField = (record: Record<string, unknown>, snakeKey: string, camelKey: string) => {
+  if (stringField(record, snakeKey, camelKey)) return true
+  const tokens = record.tokens
+  return isRecord(tokens) && !!stringField(tokens, snakeKey, camelKey)
+}
+
+const isCodexSessionRecord = (value: unknown) => {
+  if (!isRecord(value)) return false
+  if (stringField(value, 'type').toLowerCase() === 'codex') return true
+  return hasCodexTokenField(value, 'access_token', 'accessToken')
+    && (
+      hasCodexTokenField(value, 'refresh_token', 'refreshToken')
+      || hasCodexTokenField(value, 'id_token', 'idToken')
+    )
+}
+
+const isCodexSessionPayload = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value.length > 0 && value.every(isCodexSessionRecord)
+  }
+  return isCodexSessionRecord(value)
+}
+
+const formatCodexImportSummary = (res: {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+}) => {
+  return `Codex session 导入完成：创建 ${res.created}，更新 ${res.updated}，跳过 ${res.skipped}，失败 ${res.failed}`
+}
+
 const handleImport = async () => {
   if (!file.value) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
@@ -171,6 +217,22 @@ const handleImport = async () => {
   try {
     const text = await readFileAsText(file.value)
     const dataPayload = JSON.parse(text)
+
+    if (isCodexSessionPayload(dataPayload)) {
+      const res = await adminAPI.accounts.importCodexSession({
+        content: text,
+        update_existing: true,
+        skip_default_group_bind: true
+      })
+      const message = formatCodexImportSummary(res)
+      if (res.failed > 0) {
+        appStore.showError(message)
+      } else {
+        appStore.showSuccess(message)
+        emit('imported')
+      }
+      return
+    }
 
     const res = await adminAPI.accounts.importData({
       data: dataPayload,
