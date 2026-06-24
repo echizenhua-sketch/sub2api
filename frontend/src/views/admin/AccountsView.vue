@@ -98,6 +98,12 @@
                       </span>
                       <span class="flex-1 text-left">{{ t('admin.accounts.dataImport') }}</span>
                     </button>
+                    <button class="account-tools-menu-item" @click="openImportKiro">
+                      <span class="account-tools-menu-icon bg-teal-50 text-teal-600 dark:bg-teal-900/30 dark:text-teal-300">
+                        <Icon name="upload" size="sm" />
+                      </span>
+                      <span class="flex-1 text-left">批量导入 Kiro 账号</span>
+                    </button>
                     <button class="account-tools-menu-item" @click="openExportDataDialogFromMenu">
                       <span class="account-tools-menu-icon bg-violet-50 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300">
                         <Icon name="download" size="sm" />
@@ -177,6 +183,7 @@
           @delete="handleBulkDelete"
           @reset-status="handleBulkResetStatus"
           @refresh-token="handleBulkRefreshToken"
+          @refresh-usage="handleBulkRefreshUsage"
           @edit-selected="openBulkEditSelected"
           @edit-filtered="openBulkEditFiltered"
           @clear="clearSelection"
@@ -374,6 +381,7 @@
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
+    <ImportKiroModal :show="showImportKiro" @close="showImportKiro = false" @imported="handleKiroImported" />
     <BulkEditAccountModal
       :show="showBulkEdit"
       :account-ids="selIds"
@@ -420,6 +428,7 @@ import AccountTableFilters from '@/components/admin/account/AccountTableFilters.
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
+import ImportKiroModal from '@/components/admin/account/ImportKiroModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
@@ -490,6 +499,7 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
+const showImportKiro = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
@@ -871,6 +881,7 @@ const isAnyModalOpen = computed(() => {
     showEdit.value ||
     showSync.value ||
     showImportData.value ||
+    showImportKiro.value ||
     showExportDataDialog.value ||
     showBulkEdit.value ||
     showTempUnsched.value ||
@@ -1003,6 +1014,10 @@ const openSyncFromCrs = () => {
 const openImportData = () => {
   closeAccountToolsDropdown()
   showImportData.value = true
+}
+const openImportKiro = () => {
+  closeAccountToolsDropdown()
+  showImportKiro.value = true
 }
 
 const openExportDataDialogFromMenu = () => {
@@ -1265,6 +1280,22 @@ const handleBulkRefreshToken = async () => {
     appStore.showError(String(error))
   }
 }
+const handleBulkRefreshUsage = async () => {
+  if (!confirm(t('common.confirm'))) return
+  try {
+    const result = await adminAPI.accounts.batchRefreshUsage(selIds.value)
+    if (result.failed > 0) {
+      appStore.showError(`刷新用量完成：成功 ${result.success}，失败 ${result.failed}`)
+    } else {
+      appStore.showSuccess(`已刷新 ${result.success} 个账号的用量`)
+      clearSelection()
+    }
+    reload()
+  } catch (error) {
+    console.error('Failed to bulk refresh usage:', error)
+    appStore.showError(String(error))
+  }
+}
 const updateSchedulableInList = (accountIds: number[], schedulable: boolean) => {
   if (accountIds.length === 0) return
   const idSet = new Set(accountIds)
@@ -1419,6 +1450,7 @@ const handleBulkUpdated = () => {
   reload()
 }
 const handleDataImported = () => { showImportData.value = false; reload() }
+const handleKiroImported = () => { showImportKiro.value = false; reload() }
 const ACCOUNT_UNGROUPED_GROUP_QUERY_VALUE = 'ungrouped'
 const ACCOUNT_PRIVACY_MODE_UNSET_QUERY_VALUE = '__unset__'
 const buildAccountQueryFilters = () => ({

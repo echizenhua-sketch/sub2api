@@ -137,6 +137,12 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)
 	case account.IsAnthropic():
 		return s.buildAnthropicUpstreamModelsRequest(ctx, account)
+	case account.IsKiro():
+		// Kiro / CodeWhisperer 没有公开的 list-models API，使用静态模型清单
+		return nil, newUpstreamModelSyncUnsupportedError(
+			"Kiro accounts use static Claude 4.x model list; configure via model_mapping",
+			nil,
+		)
 	default:
 		return nil, newUpstreamModelSyncUnsupportedError(
 			fmt.Sprintf("Unsupported platform for upstream model sync: %s", account.Platform), nil,

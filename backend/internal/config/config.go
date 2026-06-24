@@ -88,6 +88,7 @@ type Config struct {
 	UsageCleanup            UsageCleanupConfig            `mapstructure:"usage_cleanup"`
 	Concurrency             ConcurrencyConfig             `mapstructure:"concurrency"`
 	TokenRefresh            TokenRefreshConfig            `mapstructure:"token_refresh"`
+	KiroRefresh             KiroRefreshConfig             `mapstructure:"kiro_refresh"`
 	RunMode                 string                        `mapstructure:"run_mode" yaml:"run_mode"`
 	Timezone                string                        `mapstructure:"timezone"` // e.g. "Asia/Shanghai", "UTC"
 	Gemini                  GeminiConfig                  `mapstructure:"gemini"`
@@ -529,6 +530,14 @@ type TokenRefreshConfig struct {
 	MaxRetries int `mapstructure:"max_retries"`
 	// 重试退避基础时间（秒）
 	RetryBackoffSeconds int `mapstructure:"retry_backoff_seconds"`
+}
+
+// KiroRefreshConfig Kiro 账号 token 定时刷新配置。
+type KiroRefreshConfig struct {
+	// ForceIntervalMinutes 固定周期强制刷新间隔（分钟）。
+	// 0 表示关闭固定周期，沿用"过期前 10 分钟提前刷新"的默认逻辑；
+	// >0 表示每隔该分钟数无条件强制刷新一次 kiro token（不看过期时间，但仍保留过期前兜底刷新）。
+	ForceIntervalMinutes int `mapstructure:"force_interval_minutes"`
 }
 
 type PricingConfig struct {
@@ -1964,6 +1973,7 @@ func setDefaults() {
 	viper.SetDefault("token_refresh.refresh_before_expiry_hours", 0.5) // 提前30分钟刷新（适配Google 1小时token）
 	viper.SetDefault("token_refresh.max_retries", 3)                   // 最多重试3次
 	viper.SetDefault("token_refresh.retry_backoff_seconds", 2)         // 重试退避基础2秒
+	viper.SetDefault("kiro_refresh.force_interval_minutes", 0)         // 0=关闭固定周期，沿用过期前刷新
 
 	// Gemini OAuth - configure via environment variables or config file
 	// GEMINI_OAUTH_CLIENT_ID and GEMINI_OAUTH_CLIENT_SECRET

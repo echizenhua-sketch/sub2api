@@ -430,6 +430,70 @@
       </div>
     </template>
 
+    <!-- Kiro OAuth accounts: usage from getUsageLimits -->
+    <template v-else-if="account.platform === 'kiro' && account.type === 'oauth'">
+      <div v-if="loading" class="space-y-1.5">
+        <div class="h-3 w-full animate-pulse rounded bg-gray-200 dark:bg-dark-700"></div>
+      </div>
+      <div v-else-if="usageInfo" class="space-y-1">
+        <div
+          v-if="usageInfo.subscription_tier"
+          class="mb-1 inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium bg-teal-50 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300"
+        >
+          {{ usageInfo.subscription_tier }}
+        </div>
+        <div v-if="usageInfo.error" class="text-xs text-amber-600 dark:text-amber-400 truncate max-w-[200px]" :title="usageInfo.error">
+          {{ usageInfo.error }}
+        </div>
+        <UsageProgressBar
+          v-if="usageInfo.kiro_usage"
+          label="Kiro"
+          :utilization="usageInfo.kiro_usage.utilization"
+          :resets-at="usageInfo.kiro_usage.resets_at"
+          color="indigo"
+        />
+        <div
+          v-if="usageInfo.kiro_usage && usageInfo.kiro_usage.limit_requests"
+          class="text-[10px] text-gray-500 dark:text-dark-400"
+        >
+          {{ usageInfo.kiro_usage.used_requests }} / {{ usageInfo.kiro_usage.limit_requests }} 次
+        </div>
+        <div v-if="!usageInfo.kiro_usage && !usageInfo.error" class="text-xs text-gray-400">暂无用量数据</div>
+        <div class="flex items-center gap-1.5 mt-0.5">
+          <button
+            type="button"
+            class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+            :disabled="activeQueryLoading"
+            @click="loadActiveUsage"
+          >
+            <svg
+              class="h-2.5 w-2.5"
+              :class="{ 'animate-spin': activeQueryLoading }"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            刷新用量
+          </button>
+        </div>
+      </div>
+      <div v-else>
+        <button
+          type="button"
+          class="inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[9px] font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-900/30 transition-colors"
+          :disabled="activeQueryLoading"
+          @click="loadActiveUsage"
+        >
+          <svg class="h-2.5 w-2.5" :class="{ 'animate-spin': activeQueryLoading }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          刷新用量
+        </button>
+      </div>
+    </template>
+
     <!-- Other accounts: no usage window -->
     <template v-else>
       <div class="text-xs text-gray-400">-</div>
@@ -574,6 +638,9 @@ const shouldFetchUsage = computed(() => {
     return props.account.type === 'oauth'
   }
   if (props.account.platform === 'openai') {
+    return props.account.type === 'oauth'
+  }
+  if (props.account.platform === 'kiro') {
     return props.account.type === 'oauth'
   }
   return false

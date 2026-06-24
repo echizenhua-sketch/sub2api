@@ -869,6 +869,35 @@ export interface UpdateSettingsRequest {
  * Get all system settings
  * @returns System settings
  */
+export interface AccountTempUnschedulableRule {
+  error_code: number
+  keywords?: string[]
+  duration_minutes: number
+  description?: string
+}
+
+export interface AccountTempUnschedulableRulesConfig {
+  enabled: boolean
+  rules: AccountTempUnschedulableRule[]
+}
+
+export async function getAccountTempUnschedulableRules(): Promise<AccountTempUnschedulableRulesConfig> {
+  const { data } = await apiClient.get<AccountTempUnschedulableRulesConfig>(
+    "/admin/settings/account-temp-unschedulable-rules"
+  );
+  return data;
+}
+
+export async function updateAccountTempUnschedulableRules(
+  payload: AccountTempUnschedulableRulesConfig
+): Promise<{ message: string }> {
+  const { data } = await apiClient.put<{ message: string }>(
+    "/admin/settings/account-temp-unschedulable-rules",
+    payload
+  );
+  return data;
+}
+
 export async function getSettings(): Promise<SystemSettings> {
   const { data } = await apiClient.get<SystemSettings>("/admin/settings");
   return data;

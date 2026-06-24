@@ -612,6 +612,36 @@ export async function importCodexSession(payload: CodexSessionImportRequest): Pr
   return data
 }
 
+export interface KiroImportRequest {
+  data: string
+  default_login_type?: string
+  region?: string
+  group_ids?: number[]
+  proxy_id?: number | null
+  concurrency?: number
+  priority?: number
+  rate_multiplier?: number
+  expires_at?: number
+  auto_pause_on_expired?: boolean
+  skip_default_group_bind?: boolean
+  confirm_mixed_channel_risk?: boolean
+}
+
+export interface KiroImportResult {
+  total: number
+  created: number
+  skipped: number
+  failed: number
+  errors?: Array<{ index: number; name?: string; message: string }>
+}
+
+export async function importKiro(payload: KiroImportRequest): Promise<KiroImportResult> {
+  const { data } = await apiClient.post<KiroImportResult>('/admin/accounts/import-kiro', payload, {
+    timeout: 300000
+  })
+  return data
+}
+
 /**
  * Get Antigravity default model mapping from backend
  * @returns Default model mapping (from -> to)
@@ -691,6 +721,20 @@ export async function batchRefresh(accountIds: number[]): Promise<BatchOperation
     account_ids: accountIds,
   }, {
     timeout: 120000  // 120s timeout for large batch refreshes
+  })
+  return data
+}
+
+/**
+ * Batch refresh account usage (force fetch latest usage from upstream)
+ * @param accountIds - Array of account IDs
+ * @returns Batch operation result
+ */
+export async function batchRefreshUsage(accountIds: number[]): Promise<BatchOperationResult> {
+  const { data } = await apiClient.post<BatchOperationResult>('/admin/accounts/batch-refresh-usage', {
+    account_ids: accountIds,
+  }, {
+    timeout: 120000
   })
   return data
 }
@@ -812,9 +856,11 @@ export const accountsAPI = {
   exportData,
   importData,
   importCodexSession,
+  importKiro,
   getAntigravityDefaultModelMapping,
   batchClearError,
   batchRefresh,
+  batchRefreshUsage,
   setPrivacy,
   revertProxyFallback,
   queryOpenAIQuota,

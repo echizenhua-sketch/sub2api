@@ -3383,9 +3383,6 @@ const buildTempUnschedRules = (rules: TempUnschedRuleForm[]) => {
     if (!Number.isFinite(duration) || duration <= 0) {
       continue
     }
-    if (keywords.length === 0) {
-      continue
-    }
     out.push({
       error_code: Math.trunc(errorCode),
       keywords,

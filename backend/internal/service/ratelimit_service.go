@@ -342,9 +342,10 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			s.handleCustomErrorCode(ctx, account, statusCode, msg)
 			shouldDisable = true
 		} else if statusCode >= 500 {
-			// 未启用自定义错误码时：仅记录5xx错误
+			// 上游 5xx（502/503/500/504 等）：触发多账号 failover 换号，并临时拉黑该账号，
+			// 避免后续请求反复撞上同一个短时抽风的账号。冷却到期后自动恢复调度。
 			slog.Warn("account_upstream_error", "account_id", account.ID, "status_code", statusCode)
-			shouldDisable = false
+			shouldDisable = true
 		}
 	}
 
@@ -776,7 +777,34 @@ func (s *RateLimitService) handle403(ctx context.Context, account *Account, upst
 	return true
 }
 
+// isOpenAIInsufficientBalance 判断上游 403 是否为余额不足（INSUFFICIENT_BALANCE）。
+// 兼容上游返回的 error.code / 顶层 code 字段，以及消息文本中的 insufficient...balance。
+func isOpenAIInsufficientBalance(upstreamMsg string, responseBody []byte) bool {
+	if code := strings.ToUpper(strings.TrimSpace(extractUpstreamErrorCode(responseBody))); code == "INSUFFICIENT_BALANCE" {
+		return true
+	}
+	if code := strings.ToUpper(strings.TrimSpace(gjson.GetBytes(responseBody, "code").String())); code == "INSUFFICIENT_BALANCE" {
+		return true
+	}
+	check := func(s string) bool {
+		lower := strings.ToLower(s)
+		return strings.Contains(lower, "insufficient") && strings.Contains(lower, "balance")
+	}
+	return check(upstreamMsg) || check(string(responseBody))
+}
+
 func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account, upstreamMsg string, responseBody []byte) (shouldDisable bool) {
+	// 余额不足（INSUFFICIENT_BALANCE）：余额不会自行恢复，命中即永久禁用并剔出调度，
+	// 不走 403 累计阈值（避免冷却结束后反复被选中、把余额不足错误透传给客户端）。
+	if isOpenAIInsufficientBalance(upstreamMsg, responseBody) {
+		balanceMsg := "Insufficient balance (403): account upstream balance exhausted"
+		if strings.TrimSpace(upstreamMsg) != "" {
+			balanceMsg = "Insufficient balance (403): " + upstreamMsg
+		}
+		s.handleAuthError(ctx, account, balanceMsg)
+		return true
+	}
+
 	msg := buildForbiddenErrorMessage(
 		"Access forbidden (403):",
 		upstreamMsg,
@@ -1893,11 +1921,25 @@ func modelRateLimitKeyForUpstreamModelNotFound(ctx context.Context, account *Acc
 	return modelKey
 }
 
+// effectiveTempUnschedulableRules 解析账号生效的错误处理规则：
+// 账号自身启用了规则 → 用账号规则；否则全局开关开启 → 用全局规则；都没有 → 空。
+func (s *RateLimitService) effectiveTempUnschedulableRules(ctx context.Context, account *Account) []TempUnschedulableRule {
+	if account.IsTempUnschedulableEnabled() {
+		if rules := account.GetTempUnschedulableRules(); len(rules) > 0 {
+			return rules
+		}
+	}
+	if s.settingService != nil {
+		global := s.settingService.GetGlobalTempUnschedulableRules(ctx)
+		if global.Enabled && len(global.Rules) > 0 {
+			return global.Rules
+		}
+	}
+	return nil
+}
+
 func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Account, statusCode int, responseBody []byte) bool {
 	if account == nil {
-		return false
-	}
-	if !account.IsTempUnschedulableEnabled() {
 		return false
 	}
 	// 401 首次命中可临时不可调度（给 token 刷新窗口）；
@@ -1917,11 +1959,11 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 			return false
 		}
 	}
-	rules := account.GetTempUnschedulableRules()
+	rules := s.effectiveTempUnschedulableRules(ctx, account)
 	if len(rules) == 0 {
 		return false
 	}
-	if statusCode <= 0 || len(responseBody) == 0 {
+	if statusCode <= 0 {
 		return false
 	}
 
@@ -1932,12 +1974,17 @@ func (s *RateLimitService) tryTempUnschedulable(ctx context.Context, account *Ac
 	bodyLower := strings.ToLower(string(body))
 
 	for idx, rule := range rules {
-		if rule.ErrorCode != statusCode || len(rule.Keywords) == 0 {
+		if rule.ErrorCode != statusCode {
 			continue
 		}
-		matchedKeyword := matchTempUnschedKeyword(bodyLower, rule.Keywords)
-		if matchedKeyword == "" {
-			continue
+		// 关键词可选：未配置关键词时，该错误码一律命中（不依赖响应体内容）；
+		// 配置了关键词时，必须在响应体中匹配到其一才命中。
+		matchedKeyword := ""
+		if len(rule.Keywords) > 0 {
+			matchedKeyword = matchTempUnschedKeyword(bodyLower, rule.Keywords)
+			if matchedKeyword == "" {
+				continue
+			}
 		}
 
 		if s.triggerTempUnschedulable(ctx, account, rule, idx, statusCode, matchedKeyword, responseBody) {

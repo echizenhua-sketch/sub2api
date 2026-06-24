@@ -1064,6 +1064,54 @@ func (a *Account) IsOpenAIApiKey() bool {
 	return a.IsOpenAI() && a.Type == AccountTypeAPIKey
 }
 
+func (a *Account) IsKiro() bool {
+	return a.Platform == PlatformKiro
+}
+
+func (a *Account) IsKiroOAuth() bool {
+	return a.IsKiro() && a.Type == AccountTypeOAuth
+}
+
+// IsKiroSocialLogin 判断 kiro 账号是否为社交登录（Github/Google）。
+// 社交登录走 Kiro Auth Service 刷新，只需 refresh_token，不需要 client_id/client_secret；
+// builder/idc/空 走 OIDC 刷新，需要 client_id/client_secret。
+func (a *Account) IsKiroSocialLogin() bool {
+	switch strings.ToLower(strings.TrimSpace(a.GetCredential("login_type"))) {
+	case "github", "google", "social":
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateKiroOAuthCredentials 按登录类型校验 kiro OAuth 账号创建/导入时的必填凭据字段。
+// 历史批量导入路径未校验，导致部分账号缺少 client_id/client_secret，token 过期后
+// 无法自动刷新（kiro: clientId/clientSecret required for OIDC refresh）。
+// 校验规则与 token 刷新路由保持一致：
+//   - social（github/google）：仅需 refresh_token
+//   - 其余（builder/idc/空，走 OIDC）：需要 refresh_token + client_id + client_secret
+func (a *Account) ValidateKiroOAuthCredentials() error {
+	if !a.IsKiroOAuth() {
+		return nil
+	}
+	var required []string
+	if a.IsKiroSocialLogin() {
+		required = []string{"refresh_token"}
+	} else {
+		required = []string{"refresh_token", "client_id", "client_secret"}
+	}
+	missing := make([]string, 0, len(required))
+	for _, key := range required {
+		if strings.TrimSpace(a.GetCredential(key)) == "" {
+			missing = append(missing, key)
+		}
+	}
+	if len(missing) > 0 {
+		return errors.New("kiro oauth account credentials missing required field(s): " + strings.Join(missing, ", "))
+	}
+	return nil
+}
+
 func (a *Account) GetOpenAIBaseURL() string {
 	if !a.IsOpenAI() {
 		return ""

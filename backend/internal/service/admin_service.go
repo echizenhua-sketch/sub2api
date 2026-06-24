@@ -2635,6 +2635,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 		account.LoadFactor = input.LoadFactor
 	}
+	// kiro OAuth 账号：创建/导入前校验必填凭据，避免缺字段账号 token 过期后无法刷新。
+	if err := account.ValidateKiroOAuthCredentials(); err != nil {
+		return nil, err
+	}
 	if err := s.accountRepo.Create(ctx, account); err != nil {
 		return nil, err
 	}

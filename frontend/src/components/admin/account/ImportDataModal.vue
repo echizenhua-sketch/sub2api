@@ -23,7 +23,7 @@
         >
           <div class="min-w-0">
             <div class="truncate text-sm text-gray-700 dark:text-dark-200">
-              {{ fileName || t('admin.accounts.dataImportSelectFile') }}
+              {{ fileSummary || t('admin.accounts.dataImportSelectFile') }}
             </div>
             <div class="text-xs text-gray-500 dark:text-dark-400">JSON (.json)</div>
           </div>
@@ -36,6 +36,7 @@
           type="file"
           class="hidden"
           accept="application/json,.json"
+          multiple
           @change="handleFileChange"
         />
       </div>
@@ -108,11 +109,15 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
-const file = ref<File | null>(null)
+const files = ref<File[]>([])
 const result = ref<AdminDataImportResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
-const fileName = computed(() => file.value?.name || '')
+const fileSummary = computed(() => {
+  if (files.value.length === 0) return ''
+  if (files.value.length === 1) return files.value[0]?.name || ''
+  return t('admin.accounts.dataImportSelectedFiles', { count: files.value.length })
+})
 
 const errorItems = computed(() => result.value?.errors || [])
 
@@ -120,7 +125,7 @@ watch(
   () => props.show,
   (open) => {
     if (open) {
-      file.value = null
+      files.value = []
       result.value = null
       if (fileInput.value) {
         fileInput.value.value = ''
@@ -135,7 +140,7 @@ const openFilePicker = () => {
 
 const handleFileChange = (event: Event) => {
   const target = event.target as HTMLInputElement
-  file.value = target.files?.[0] || null
+  files.value = Array.from(target.files || [])
 }
 
 const handleClose = () => {
@@ -161,43 +166,181 @@ const readFileAsText = async (sourceFile: File): Promise<string> => {
   })
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> => {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+const stringField = (record: Record<string, unknown>, ...keys: string[]) => {
+  for (const key of keys) {
+    const value = record[key]
+    if (typeof value === 'string' && value.trim()) {
+      return value.trim()
+    }
+  }
+  return ''
+}
+
+const hasCodexTokenField = (record: Record<string, unknown>, snakeKey: string, camelKey: string) => {
+  if (stringField(record, snakeKey, camelKey)) return true
+  const tokens = record.tokens
+  return isRecord(tokens) && !!stringField(tokens, snakeKey, camelKey)
+}
+
+const isCodexSessionRecord = (value: unknown) => {
+  if (!isRecord(value)) return false
+  if (stringField(value, 'type').toLowerCase() === 'codex') return true
+  return hasCodexTokenField(value, 'access_token', 'accessToken')
+    && (
+      hasCodexTokenField(value, 'refresh_token', 'refreshToken')
+      || hasCodexTokenField(value, 'id_token', 'idToken')
+    )
+}
+
+const isCodexSessionPayload = (value: unknown) => {
+  if (Array.isArray(value)) {
+    return value.length > 0 && value.every(isCodexSessionRecord)
+  }
+  return isCodexSessionRecord(value)
+}
+
+const formatCodexImportSummary = (res: {
+  created: number
+  updated: number
+  skipped: number
+  failed: number
+}) => {
+  return `Codex session 导入完成：创建 ${res.created}，更新 ${res.updated}，跳过 ${res.skipped}，失败 ${res.failed}`
+}
+
+const createEmptyImportResult = (): AdminDataImportResult => ({
+  proxy_created: 0,
+  proxy_reused: 0,
+  proxy_failed: 0,
+  account_created: 0,
+  account_failed: 0,
+  errors: []
+})
+
+const mergeImportResult = (
+  target: AdminDataImportResult,
+  source: AdminDataImportResult,
+  sourceFile: File
+) => {
+  target.proxy_created += source.proxy_created
+  target.proxy_reused += source.proxy_reused
+  target.proxy_failed += source.proxy_failed
+  target.account_created += source.account_created
+  target.account_failed += source.account_failed
+
+  if (source.errors?.length) {
+    const errors = target.errors || []
+    const withFileNames = source.errors.map((item) => ({
+      ...item,
+      message: files.value.length > 1 ? `${sourceFile.name}: ${item.message}` : item.message
+    }))
+    target.errors = errors.concat(withFileNames)
+  }
+}
+
+const hasImportResultErrors = (res: AdminDataImportResult) => {
+  return res.account_failed > 0 || res.proxy_failed > 0
+}
+
+const hasImportResultSideEffect = (res: AdminDataImportResult) => {
+  return !hasImportResultErrors(res)
+    || res.account_created > 0
+    || res.proxy_created > 0
+    || res.proxy_reused > 0
+}
+
+const formatFileMessage = (sourceFile: File, message: string) => {
+  return files.value.length > 1 ? `${sourceFile.name}: ${message}` : message
+}
+
+const formatImportError = (error: any) => {
+  if (error instanceof SyntaxError) {
+    return t('admin.accounts.dataImportParseFailed')
+  }
+  return error?.message || t('admin.accounts.dataImportFailed')
+}
+
 const handleImport = async () => {
-  if (!file.value) {
+  if (files.value.length === 0) {
     appStore.showError(t('admin.accounts.dataImportSelectFile'))
     return
   }
 
   importing.value = true
+  result.value = null
   try {
-    const text = await readFileAsText(file.value)
-    const dataPayload = JSON.parse(text)
+    const aggregate = createEmptyImportResult()
+    let hasGenericImport = false
+    let hasBatchErrors = false
+    let shouldRefreshList = false
 
-    const res = await adminAPI.accounts.importData({
-      data: dataPayload,
-      skip_default_group_bind: true
-    })
+    for (const sourceFile of files.value) {
+      try {
+        const text = await readFileAsText(sourceFile)
+        const dataPayload = JSON.parse(text)
 
-    result.value = res
+        if (isCodexSessionPayload(dataPayload)) {
+          const res = await adminAPI.accounts.importCodexSession({
+            content: text,
+            update_existing: true,
+            skip_default_group_bind: true
+          })
+          const message = formatFileMessage(sourceFile, formatCodexImportSummary(res))
+          if (res.failed > 0) {
+            hasBatchErrors = true
+            appStore.showError(message)
+          } else {
+            appStore.showSuccess(message)
+            shouldRefreshList = true
+          }
+          continue
+        }
 
-    const msgParams: Record<string, unknown> = {
-      account_created: res.account_created,
-      account_failed: res.account_failed,
-      proxy_created: res.proxy_created,
-      proxy_reused: res.proxy_reused,
-      proxy_failed: res.proxy_failed,
+        const res = await adminAPI.accounts.importData({
+          data: dataPayload,
+          skip_default_group_bind: true
+        })
+
+        hasGenericImport = true
+        mergeImportResult(aggregate, res, sourceFile)
+        if (hasImportResultErrors(res)) {
+          hasBatchErrors = true
+        }
+        if (hasImportResultSideEffect(res)) {
+          shouldRefreshList = true
+        }
+      } catch (error: any) {
+        hasBatchErrors = true
+        appStore.showError(formatFileMessage(sourceFile, formatImportError(error)))
+      }
     }
-    if (res.account_failed > 0 || res.proxy_failed > 0) {
-      appStore.showError(t('admin.accounts.dataImportCompletedWithErrors', msgParams))
-    } else {
-      appStore.showSuccess(t('admin.accounts.dataImportSuccess', msgParams))
+
+    if (hasGenericImport) {
+      result.value = aggregate
+
+      const msgParams: Record<string, unknown> = {
+        account_created: aggregate.account_created,
+        account_failed: aggregate.account_failed,
+        proxy_created: aggregate.proxy_created,
+        proxy_reused: aggregate.proxy_reused,
+        proxy_failed: aggregate.proxy_failed,
+      }
+      if (hasImportResultErrors(aggregate) || hasBatchErrors) {
+        appStore.showError(t('admin.accounts.dataImportCompletedWithErrors', msgParams))
+      } else {
+        appStore.showSuccess(t('admin.accounts.dataImportSuccess', msgParams))
+      }
+    }
+
+    if (shouldRefreshList) {
       emit('imported')
     }
   } catch (error: any) {
-    if (error instanceof SyntaxError) {
-      appStore.showError(t('admin.accounts.dataImportParseFailed'))
-    } else {
-      appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
-    }
+    appStore.showError(formatImportError(error))
   } finally {
     importing.value = false
   }

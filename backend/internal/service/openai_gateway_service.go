@@ -3500,12 +3500,21 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 }
 
 func shouldFailoverOpenAIPassthroughResponse(statusCode int) bool {
+	// 策略：除"换号也无济于事"的客户端错误外，所有上游错误都触发多账号 failover。
+	// 客户端错误（请求本身有问题，换账号会撞同样的错）：
+	//   400 请求格式错 / 404 路径或模型不存在 / 413 请求体过大 / 422 参数校验失败
+	// 其余（401/403/408/429/5xx/529 等）均换号重试。
 	switch statusCode {
-	case http.StatusTooManyRequests, 529:
-		return true
-	default:
+	case http.StatusBadRequest, // 400
+		http.StatusNotFound,              // 404
+		http.StatusRequestEntityTooLarge, // 413
+		http.StatusUnprocessableEntity:   // 422
 		return false
 	}
+	if statusCode >= 400 {
+		return true
+	}
+	return false
 }
 
 func (s *OpenAIGatewayService) handleFailoverErrorResponsePassthrough(
