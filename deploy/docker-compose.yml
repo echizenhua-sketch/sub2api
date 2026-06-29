@@ -189,6 +189,22 @@ services:
       start_period: 30s
 
   # ===========================================================================
+  # Cloudflare Tunnel for stable public hostname
+  # ===========================================================================
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: sub2api-cloudflared
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TUNNEL_TOKEN:?Please set CLOUDFLARED_TUNNEL_TOKEN in .env}
+    depends_on:
+      sub2api:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - sub2api-network
+
+  # ===========================================================================
   # PostgreSQL Database
   # ===========================================================================
   postgres:
@@ -276,3 +292,6 @@ volumes:
 networks:
   sub2api-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16

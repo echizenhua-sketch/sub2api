@@ -200,7 +200,12 @@ type SystemSettings struct {
 	RewriteMessageCacheControl             bool   // 是否改写 messages[*].content[*].cache_control（默认 false）
 	AntigravityUserAgentVersion            string // Antigravity 上游 User-Agent 版本号；空值使用配置/默认值
 	OpenAICodexUserAgent                   string // OpenAI Codex 上游完整 User-Agent；空值使用内置默认
-	OpenAIAllowClaudeCodeCodexPlugin       bool   // 全局开关：是否额外放行 Claude Code 的 Codex 插件（默认 false）
+	MinCodexVersion                        string // codex_cli_only 最低 Codex 引擎版本；空=不检查
+	MaxCodexVersion                        string // codex_cli_only 最高 Codex 引擎版本；空=不检查
+	CodexCLIOnlyBlacklist                  string // codex_cli_only 全局黑名单 JSON（[]AllowedClientEntry，OR deny）
+	CodexCLIOnlyWhitelist                  string // codex_cli_only 全局白名单 JSON（[]AllowedClientEntry，AND allow）
+	CodexCLIOnlyAllowAppServerClients      bool   // codex_cli_only App Server 开关：对未列名客户端开闸（默认 false）
+	CodexCLIOnlyEngineFingerprintSignals   string // codex_cli_only 引擎指纹门信号列表 JSON（[]EngineFingerprintSignal）
 
 	// Web Search Emulation
 	WebSearchEmulationEnabled bool // 是否启用 web search 模拟
@@ -423,10 +428,22 @@ func DefaultRectifierSettings() *RectifierSettings {
 }
 
 // Beta Policy 策略常量
+//
+// 动作优先级（同一 token 命中多条规则时）：
+//   block  > filter > inject > pass
+//
+// - block ：拦截整个请求，直接返回错误
+// - filter：从最终发往上游的 anthropic-beta header 中移除该 token
+// - inject：主动把该 token 注入最终 anthropic-beta header；即使客户端没传也会发出
+// - pass  ：完全透传客户端原值，不做处理
+//
+// 当一条规则配置 inject、另一条规则配置 filter 同一 token 时，filter 优先（同 token 视为冲突，
+// 以更保守的语义为准），相当于该 token 既不出现在最终 header 中也不被注入。
 const (
 	BetaPolicyActionPass   = "pass"   // 透传，不做任何处理
 	BetaPolicyActionFilter = "filter" // 过滤，从 beta header 中移除该 token
 	BetaPolicyActionBlock  = "block"  // 拦截，直接返回错误
+	BetaPolicyActionInject = "inject" // 注入，主动把该 token 加入最终 beta header
 
 	BetaPolicyScopeAll     = "all"     // 所有账号类型
 	BetaPolicyScopeOAuth   = "oauth"   // 仅 OAuth 账号
