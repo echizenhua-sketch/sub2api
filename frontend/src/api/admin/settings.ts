@@ -1286,11 +1286,11 @@ export interface OpenAIFastPolicySettings {
  */
 export interface BetaPolicyRule {
   beta_token: string;
-  action: "pass" | "filter" | "block";
+  action: "pass" | "filter" | "block" | "inject";
   scope: "all" | "oauth" | "apikey" | "bedrock";
   error_message?: string;
   model_whitelist?: string[];
-  fallback_action?: "pass" | "filter" | "block";
+  fallback_action?: "pass" | "filter" | "block" | "inject";
   fallback_error_message?: string;
 }
 

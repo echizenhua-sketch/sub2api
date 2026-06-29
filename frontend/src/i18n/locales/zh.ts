@@ -6632,6 +6632,7 @@ export default {
         actionPass: '透传（不处理）',
         actionFilter: '过滤（移除）',
         actionBlock: '拦截（拒绝请求）',
+        actionInject: '注入（强制添加到 anthropic-beta）',
         scope: '生效范围',
         scopeAll: '全部账号',
         scopeOAuth: '仅 OAuth 账号',

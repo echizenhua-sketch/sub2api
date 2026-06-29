@@ -6477,6 +6477,7 @@ export default {
         actionPass: 'Pass (transparent)',
         actionFilter: 'Filter (remove)',
         actionBlock: 'Block (reject)',
+        actionInject: 'Inject (force add to anthropic-beta)',
         scope: 'Scope',
         scopeAll: 'All accounts',
         scopeOAuth: 'OAuth only',

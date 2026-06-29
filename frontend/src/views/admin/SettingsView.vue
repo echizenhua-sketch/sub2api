@@ -7417,11 +7417,11 @@ const betaPolicySaving = ref(false);
 const betaPolicyForm = reactive({
   rules: [] as Array<{
     beta_token: string;
-    action: "pass" | "filter" | "block";
+    action: "pass" | "filter" | "block" | "inject";
     scope: "all" | "oauth" | "apikey" | "bedrock";
     error_message?: string;
     model_whitelist?: string[];
-    fallback_action?: "pass" | "filter" | "block";
+    fallback_action?: "pass" | "filter" | "block" | "inject";
     fallback_error_message?: string;
   }>,
 });
@@ -9745,6 +9745,7 @@ const betaPolicyActionOptions = computed(() => [
   { value: "pass", label: t("admin.settings.betaPolicy.actionPass") },
   { value: "filter", label: t("admin.settings.betaPolicy.actionFilter") },
   { value: "block", label: t("admin.settings.betaPolicy.actionBlock") },
+  { value: "inject", label: t("admin.settings.betaPolicy.actionInject") },
 ]);
 
 const betaPolicyScopeOptions = computed(() => [
@@ -9766,9 +9767,9 @@ const betaPresets: Record<
   Array<{
     label: string;
     description: string;
-    action: "pass" | "filter" | "block";
+    action: "pass" | "filter" | "block" | "inject";
     model_whitelist: string[];
-    fallback_action: "pass" | "filter" | "block";
+    fallback_action: "pass" | "filter" | "block" | "inject";
   }>
 > = {
   "context-1m-2025-08-07": [
@@ -9797,9 +9798,9 @@ function getBetaDisplayName(token: string): string {
 function applyBetaPreset(
   rule: (typeof betaPolicyForm.rules)[number],
   preset: {
-    action: "pass" | "filter" | "block";
+    action: "pass" | "filter" | "block" | "inject";
     model_whitelist: string[];
-    fallback_action: "pass" | "filter" | "block";
+    fallback_action: "pass" | "filter" | "block" | "inject";
   },
 ) {
   rule.action = preset.action;

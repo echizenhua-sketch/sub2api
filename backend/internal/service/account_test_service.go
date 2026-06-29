@@ -51,9 +51,11 @@ type TestEvent struct {
 }
 
 const (
-	defaultGeminiTextTestPrompt  = "hi"
-	defaultGeminiImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
-	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	defaultGeminiTextTestPrompt        = "hi"
+	defaultGeminiImageTestPrompt       = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	defaultOpenAITextTestPrompt        = "hi"
+	defaultOpenAIImageTestPrompt       = "Generate a cute orange cat astronaut sticker on a clean pastel background."
+	defaultOpenAIAPIKeyTestInstruction = "You are a helpful assistant."
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -71,6 +73,7 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+	settingService            *SettingService // 可选，nil 时不消费 BetaPolicy
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -83,6 +86,7 @@ func NewAccountTestService(
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	settingService *SettingService,
 ) *AccountTestService {
 	return &AccountTestService{
 		accountRepo:               accountRepo,
@@ -93,7 +97,73 @@ func NewAccountTestService(
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
+		settingService:            settingService,
 	}
+}
+
+// applyBetaPolicyToTestHeader 在测试连接场景下，对默认 anthropic-beta header 应用
+// 当前账号/模型生效的 BetaPolicy filter + inject。block 不会在此触发（头本身
+// 是网关默认值，需要在上层测试逻辑中处理 block）。
+func (s *AccountTestService) applyBetaPolicyToTestHeader(ctx context.Context, account *Account, model, baseHeader string) string {
+	if s == nil || s.settingService == nil || account == nil {
+		return baseHeader
+	}
+	settings, err := s.settingService.GetBetaPolicySettings(ctx)
+	if err != nil || settings == nil || len(settings.Rules) == 0 {
+		return baseHeader
+	}
+	isOAuth := account.IsOAuth()
+	isBedrock := account.IsBedrock()
+	filterSet := map[string]struct{}{}
+	injectSet := map[string]struct{}{}
+	for _, rule := range settings.Rules {
+		if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock) {
+			continue
+		}
+		effAction, _ := resolveRuleAction(rule, model)
+		switch effAction {
+		case BetaPolicyActionFilter:
+			if rule.BetaToken != "" {
+				filterSet[rule.BetaToken] = struct{}{}
+			}
+		case BetaPolicyActionInject:
+			if rule.BetaToken != "" {
+				injectSet[rule.BetaToken] = struct{}{}
+			}
+		}
+	}
+	// filter 优先于 inject
+	for t := range filterSet {
+		delete(injectSet, t)
+	}
+	// 从 base 头中剔除 filter
+	tokens := strings.Split(baseHeader, ",")
+	kept := make([]string, 0, len(tokens)+len(injectSet))
+	seen := map[string]struct{}{}
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if _, drop := filterSet[t]; drop {
+			continue
+		}
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		kept = append(kept, t)
+	}
+	// 追加 inject token（去重）
+	injectList := sortedBetaTokens(injectSet)
+	for _, t := range injectList {
+		if _, dup := seen[t]; dup {
+			continue
+		}
+		seen[t] = struct{}{}
+		kept = append(kept, t)
+	}
+	return strings.Join(kept, ",")
 }
 
 func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error) {
@@ -206,9 +276,9 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 //
 // Phase 6 MVP 实现：用 access_token 调一次 OIDC token introspection 端点不可行
 // （AWS OIDC 不公开 introspection），所以改成最简检查：
-//   1. credentials 里 access_token / refresh_token 都不为空
-//   2. 调用 KiroOAuthService.RefreshAccountToken 刷一次，确认凭证仍可换出新 token
-//      失败时 endpoint 会返回 4xx，连通性测试也算失败
+//  1. credentials 里 access_token / refresh_token 都不为空
+//  2. 调用 KiroOAuthService.RefreshAccountToken 刷一次，确认凭证仍可换出新 token
+//     失败时 endpoint 会返回 4xx，连通性测试也算失败
 //
 // 比直接调 generateAssistantResponse 更轻量，且不消耗用户配额。
 func (s *AccountTestService) testKiroAccountConnection(c *gin.Context, account *Account, modelID string) error {
@@ -351,10 +421,10 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	// Set authentication header
 	if useBearer {
-		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+		req.Header.Set("anthropic-beta", s.applyBetaPolicyToTestHeader(ctx, account, modelID, claude.DefaultBetaHeader))
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
-		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+		req.Header.Set("anthropic-beta", s.applyBetaPolicyToTestHeader(ctx, account, modelID, claude.APIKeyBetaHeader))
 		req.Header.Set("x-api-key", authToken)
 	}
 
@@ -634,7 +704,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Flush()
 
 	// Create OpenAI Responses API payload
-	payload := createOpenAITestPayload(testModelID, isOAuth)
+	payload := createOpenAITestPayload(testModelID, prompt, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
 
 	// Send test_start event
@@ -686,7 +756,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			errMsg := fmt.Sprintf("Authentication failed (401): %s", string(body))
 			_ = s.accountRepo.SetError(ctx, account.ID, errMsg)
 		}
-		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+		return s.sendErrorAndEnd(c, formatOpenAIAccountTestHTTPError(resp.StatusCode, resp.Header.Get("Content-Type"), body))
 	}
 
 	// Process SSE stream
@@ -1282,7 +1352,12 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 }
 
 // createOpenAITestPayload creates a test payload for OpenAI Responses API
-func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
+func createOpenAITestPayload(modelID string, prompt string, isOAuth bool) map[string]any {
+	testPrompt := strings.TrimSpace(prompt)
+	if testPrompt == "" {
+		testPrompt = defaultOpenAITextTestPrompt
+	}
+
 	payload := map[string]any{
 		"model": modelID,
 		"input": []map[string]any{
@@ -1291,7 +1366,7 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 				"content": []map[string]any{
 					{
 						"type": "input_text",
-						"text": "hi",
+						"text": testPrompt,
 					},
 				},
 			},
@@ -1302,12 +1377,33 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 	// OAuth accounts using ChatGPT internal API require store: false
 	if isOAuth {
 		payload["store"] = false
+		payload["instructions"] = openai.DefaultInstructions
+	} else {
+		payload["instructions"] = defaultOpenAIAPIKeyTestInstruction
 	}
 
-	// All accounts require instructions for Responses API
-	payload["instructions"] = openai.DefaultInstructions
-
 	return payload
+}
+
+func formatOpenAIAccountTestHTTPError(statusCode int, contentType string, body []byte) string {
+	bodyText := strings.TrimSpace(string(body))
+	if isHTMLBlockResponse(contentType, bodyText) {
+		message := "HTML block page from upstream WAF/security policy"
+		if strings.Contains(bodyText, "Your request may be a threat and has been blocked") {
+			message += ": Your request may be a threat and has been blocked"
+		}
+		return fmt.Sprintf("API returned %d: %s", statusCode, message)
+	}
+	return fmt.Sprintf("API returned %d: %s", statusCode, bodyText)
+}
+
+func isHTMLBlockResponse(contentType string, bodyText string) bool {
+	contentType = strings.ToLower(contentType)
+	if strings.Contains(contentType, "text/html") {
+		return true
+	}
+	bodyPrefix := strings.ToLower(strings.TrimSpace(bodyText))
+	return strings.HasPrefix(bodyPrefix, "<!doctype html") || strings.HasPrefix(bodyPrefix, "<html")
 }
 
 func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[string]any {

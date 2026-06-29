@@ -4828,7 +4828,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.forwardBedrock(ctx, c, account, parsed, startTime)
 	}
 
-	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
+	// Beta policy: evaluate once; block check + cache filter set / inject set for buildUpstreamRequest.
 	// Always overwrite the cache to prevent stale values from a previous retry with a different account.
 	if account.Platform == PlatformAnthropic && c != nil {
 		policy := s.evaluateBetaPolicy(ctx, c.GetHeader("anthropic-beta"), account, parsed.Model)
@@ -4840,6 +4840,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			filterSet = map[string]struct{}{}
 		}
 		c.Set(betaPolicyFilterSetKey, filterSet)
+		injectSet := policy.injectSet
+		if injectSet == nil {
+			injectSet = map[string]struct{}{}
+		}
+		c.Set(betaPolicyInjectSetKey, injectSet)
 	}
 
 	body := parsed.Body.Bytes()
@@ -6766,9 +6771,10 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	//   4) NewRequest（body 至此最终敲定）
 	//   5) 透传白名单 / fingerprint / mimic header / 写入 finalBeta
 	policyFilterSet := s.getBetaPolicyFilterSet(ctx, c, account, modelID)
+	policyInjectSet := s.getBetaPolicyInjectSet(ctx, c, account, modelID)
 	effectiveDropSet := mergeDropSets(policyFilterSet)
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalAnthropicBeta(
-		tokenType, mimicClaudeCode, modelID, clientHeaders, body, effectiveDropSet,
+		tokenType, mimicClaudeCode, modelID, clientHeaders, body, effectiveDropSet, policyInjectSet,
 	)
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称
@@ -7144,10 +7150,19 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 	clientHeaders http.Header,
 	body []byte,
 	effectiveDropSet map[string]struct{},
+	injectSet map[string]struct{},
 ) (string, bool) {
 	clientBeta := ""
 	if clientHeaders != nil {
 		clientBeta = getHeaderRaw(clientHeaders, "anthropic-beta")
+	}
+
+	injectList := sortedBetaTokensExcluding(injectSet, effectiveDropSet)
+	appendInject := func(base string) string {
+		if len(injectList) == 0 {
+			return base
+		}
+		return mergeAnthropicBeta(injectList, base)
 	}
 
 	if tokenType == "oauth" {
@@ -7158,22 +7173,30 @@ func (s *GatewayService) computeFinalAnthropicBeta(
 			if !strings.Contains(strings.ToLower(modelID), "haiku") {
 				requiredBetas = claude.FullClaudeCodeMimicryBetas()
 			}
+			if len(injectList) > 0 {
+				requiredBetas = append(requiredBetas, injectList...)
+			}
 			return mergeAnthropicBetaDropping(requiredBetas, "", effectiveDropSet), true
 		}
 		// 真 Claude Code 客户端透传路径
-		return stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet), true
+		return appendInject(stripBetaTokensWithSet(s.getBetaHeader(modelID, clientBeta), effectiveDropSet)), true
 	}
 
 	// API-key accounts
 	if clientBeta != "" {
-		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
+		return appendInject(stripBetaTokensWithSet(clientBeta, effectiveDropSet)), true
 	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return appendInject(beta), true
 			}
 		}
+	}
+	// 客户端未传 anthropic-beta、也未命中 InjectBetaForAPIKey：
+	// 如配置了 inject 规则，仍主动发出 inject token。
+	if len(injectList) > 0 {
+		return strings.Join(injectList, ","), true
 	}
 	return "", false
 }
@@ -7195,10 +7218,19 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 	clientHeaders http.Header,
 	body []byte,
 	effectiveDropSet map[string]struct{},
+	injectSet map[string]struct{},
 ) (string, bool) {
 	clientBeta := ""
 	if clientHeaders != nil {
 		clientBeta = getHeaderRaw(clientHeaders, "anthropic-beta")
+	}
+
+	injectList := sortedBetaTokensExcluding(injectSet, effectiveDropSet)
+	appendInject := func(base string) string {
+		if len(injectList) == 0 {
+			return base
+		}
+		return mergeAnthropicBeta(injectList, base)
 	}
 
 	if tokenType == "oauth" {
@@ -7208,28 +7240,36 @@ func (s *GatewayService) computeFinalCountTokensAnthropicBeta(
 			// incomingBeta = req.Header[anthropic-beta] = 客户端透传过来的 client beta。
 			// 重构后直接从 clientHeaders 拿同一个值，保持行为一致。
 			requiredBetas := append(claude.FullClaudeCodeMimicryBetas(), claude.BetaTokenCounting)
+			if len(injectList) > 0 {
+				requiredBetas = append(requiredBetas, injectList...)
+			}
 			return mergeAnthropicBetaDropping(requiredBetas, clientBeta, effectiveDropSet), true
 		}
 		if clientBeta == "" {
-			return claude.CountTokensBetaHeader, true
+			return appendInject(claude.CountTokensBetaHeader), true
 		}
 		beta := s.getBetaHeader(modelID, clientBeta)
 		if !strings.Contains(beta, claude.BetaTokenCounting) {
 			beta = beta + "," + claude.BetaTokenCounting
 		}
-		return stripBetaTokensWithSet(beta, effectiveDropSet), true
+		return appendInject(stripBetaTokensWithSet(beta, effectiveDropSet)), true
 	}
 
 	// API-key accounts
 	if clientBeta != "" {
-		return stripBetaTokensWithSet(clientBeta, effectiveDropSet), true
+		return appendInject(stripBetaTokensWithSet(clientBeta, effectiveDropSet)), true
 	}
 	if s.cfg != nil && s.cfg.Gateway.InjectBetaForAPIKey {
 		if requestNeedsBetaFeatures(body) {
 			if beta := defaultAPIKeyBetaHeader(body); beta != "" {
-				return beta, true
+				return appendInject(beta), true
 			}
 		}
+	}
+	// 客户端未传 anthropic-beta、也未命中 InjectBetaForAPIKey：
+	// 如配置了 inject 规则，仍主动发出 inject token。
+	if len(injectList) > 0 {
+		return strings.Join(injectList, ","), true
 	}
 	return "", false
 }
@@ -7275,9 +7315,13 @@ func (e *BetaBlockedError) Error() string { return e.Message }
 type betaPolicyResult struct {
 	blockErr  *BetaBlockedError   // non-nil if a block rule matched
 	filterSet map[string]struct{} // tokens to filter (may be nil)
+	injectSet map[string]struct{} // tokens to inject into the final beta header (may be nil)
 }
 
 // evaluateBetaPolicy loads settings once and evaluates all rules against the given request.
+//
+// 动作优先级：block > filter > inject > pass。同一 token 如同时出现在 filter 和 inject
+// 中，filter 会从 injectSet 中移除该 token，最终不会被注入。
 func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader string, account *Account, model string) betaPolicyResult {
 	if s.settingService == nil {
 		return betaPolicyResult{}
@@ -7308,9 +7352,59 @@ func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader stri
 				result.filterSet = make(map[string]struct{})
 			}
 			result.filterSet[rule.BetaToken] = struct{}{}
+		case BetaPolicyActionInject:
+			if rule.BetaToken == "" {
+				continue
+			}
+			if result.injectSet == nil {
+				result.injectSet = make(map[string]struct{})
+			}
+			result.injectSet[rule.BetaToken] = struct{}{}
+		}
+	}
+	// filter 优先于 inject：同一 token 被另一条规则 filter 后，不再注入。
+	if len(result.injectSet) > 0 && len(result.filterSet) > 0 {
+		for t := range result.filterSet {
+			delete(result.injectSet, t)
+		}
+		if len(result.injectSet) == 0 {
+			result.injectSet = nil
 		}
 	}
 	return result
+}
+
+// sortedBetaTokens 把 token 集合按字典序输出为切片。用于 inject 流程，给最终
+// anthropic-beta header 提供稳定、可重放的顺序（相同集合每次产生同一字符串），
+// 便于做 hash 比对/单测断言。空集合返回 nil。
+func sortedBetaTokens(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedBetaTokensExcluding(set map[string]struct{}, drop map[string]struct{}) []string {
+	if len(set) == 0 {
+		return nil
+	}
+	if len(drop) == 0 {
+		return sortedBetaTokens(set)
+	}
+	out := make([]string, 0, len(set))
+	for t := range set {
+		if _, blocked := drop[t]; blocked {
+			continue
+		}
+		out = append(out, t)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // mergeDropSets merges the static defaultDroppedBetasSet with dynamic policy filter tokens.
@@ -7335,6 +7429,9 @@ func mergeDropSets(policySet map[string]struct{}, extra ...string) map[string]st
 // betaPolicyFilterSetKey is the gin.Context key for caching the policy filter set within a request.
 const betaPolicyFilterSetKey = "betaPolicyFilterSet"
 
+// betaPolicyInjectSetKey is the gin.Context key for caching the policy inject set within a request.
+const betaPolicyInjectSetKey = "betaPolicyInjectSet"
+
 // getBetaPolicyFilterSet returns the beta policy filter set, using the gin context cache if available.
 // In the /v1/messages path, Forward() evaluates the policy first and caches the result;
 // buildUpstreamRequest reuses it (zero extra DB calls). In the count_tokens path, this
@@ -7348,6 +7445,20 @@ func (s *GatewayService) getBetaPolicyFilterSet(ctx context.Context, c *gin.Cont
 		}
 	}
 	return s.evaluateBetaPolicy(ctx, "", account, model).filterSet
+}
+
+// getBetaPolicyInjectSet 返回当前请求需要主动注入的 beta token 集合，命中 gin
+// 上下文缓存时复用 Forward() 已评估的结果，避免 count_tokens / buildUpstreamRequest
+// 重复访问 SettingService。返回值可能为 nil（无 inject 规则匹配）。
+func (s *GatewayService) getBetaPolicyInjectSet(ctx context.Context, c *gin.Context, account *Account, model string) map[string]struct{} {
+	if c != nil {
+		if v, ok := c.Get(betaPolicyInjectSetKey); ok {
+			if is, ok := v.(map[string]struct{}); ok {
+				return is
+			}
+		}
+	}
+	return s.evaluateBetaPolicy(ctx, "", account, model).injectSet
 }
 
 // betaPolicyScopeMatches checks whether a rule's scope matches the current account type.
@@ -7444,8 +7555,19 @@ func (s *GatewayService) resolveBedrockBetaTokensForRequest(
 		return nil, policy.blockErr
 	}
 
-	// 2. 解析 header + body 自动注入 + Bedrock 转换/过滤
-	betaTokens := ResolveBedrockBetaTokens(betaHeader, body, modelID)
+	// 2. 合并 inject token（管理员主动注入）与客户端 header，再走 Bedrock 白名单过滤。
+	//    inject 仅会被下发上游 Bedrock；autoInject 可能进一步被本身请求体推导增量。
+	mergedBetaHeader := betaHeader
+	if len(policy.injectSet) > 0 {
+		injectList := sortedBetaTokens(policy.injectSet)
+		injectStr := strings.Join(injectList, ",")
+		if strings.TrimSpace(mergedBetaHeader) == "" {
+			mergedBetaHeader = injectStr
+		} else {
+			mergedBetaHeader = mergedBetaHeader + "," + injectStr
+		}
+	}
+	betaTokens := ResolveBedrockBetaTokens(mergedBetaHeader, body, modelID)
 
 	// 3. 对最终 token 列表再做 block 检查，捕获通过 body 自动注入绕过 header block 的情况。
 	//    例如：管理员 block 了 interleaved-thinking，客户端不在 header 中带该 token，
@@ -10329,8 +10451,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===
 	// 顺序约束同 buildUpstreamRequest。
 	ctEffectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
+	ctInjectSet := s.getBetaPolicyInjectSet(ctx, c, account, modelID)
 	finalBetaHeader, finalBetaShouldSet := s.computeFinalCountTokensAnthropicBeta(
-		tokenType, mimicClaudeCode, modelID, clientHeaders, body, ctEffectiveDropSet,
+		tokenType, mimicClaudeCode, modelID, clientHeaders, body, ctEffectiveDropSet, ctInjectSet,
 	)
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称

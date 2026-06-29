@@ -5054,7 +5054,7 @@ func (s *SettingService) SetBetaPolicySettings(ctx context.Context, settings *Be
 	}
 
 	validActions := map[string]bool{
-		BetaPolicyActionPass: true, BetaPolicyActionFilter: true, BetaPolicyActionBlock: true,
+		BetaPolicyActionPass: true, BetaPolicyActionFilter: true, BetaPolicyActionBlock: true, BetaPolicyActionInject: true,
 	}
 	validScopes := map[string]bool{
 		BetaPolicyScopeAll: true, BetaPolicyScopeOAuth: true, BetaPolicyScopeAPIKey: true, BetaPolicyScopeBedrock: true,
