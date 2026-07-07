@@ -5,11 +5,13 @@ import { adminAPI } from '@/api/admin'
 
 const showError = vi.fn()
 const showSuccess = vi.fn()
+const showWarning = vi.fn()
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError,
-    showSuccess
+    showSuccess,
+    showWarning
   })
 }))
 
@@ -28,52 +30,188 @@ vi.mock('vue-i18n', () => ({
   })
 }))
 
+const mountModal = () =>
+  mount(ImportDataModal, {
+    props: { show: true },
+    global: {
+      stubs: {
+        BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
+      }
+    }
+  })
+
+const makeJsonFile = (name: string, content: string, type = 'application/json') => {
+  const file = new File([content], name, { type })
+  Object.defineProperty(file, 'text', {
+    value: () => Promise.resolve(content)
+  })
+  return file
+}
+
+const setInputFiles = (element: Element, files: File[]) => {
+  Object.defineProperty(element, 'files', {
+    value: files,
+    configurable: true
+  })
+}
+
 describe('ImportDataModal', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     showError.mockReset()
     showSuccess.mockReset()
+    showWarning.mockReset()
     vi.mocked(adminAPI.accounts.importData).mockReset()
     vi.mocked(adminAPI.accounts.importCodexSession).mockReset()
   })
 
   it('未选择文件时提示错误', async () => {
-    const wrapper = mount(ImportDataModal, {
-      props: { show: true },
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-        }
-      }
-    })
+    const wrapper = mountModal()
 
     await wrapper.find('form').trigger('submit')
     expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportSelectFile')
   })
 
-  it('无效 JSON 时提示解析失败', async () => {
-    const wrapper = mount(ImportDataModal, {
-      props: { show: true },
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-        }
-      }
-    })
+  it('无效 JSON 时按文件名提示解析失败', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    const wrapper = mountModal()
 
     const input = wrapper.find('input[type="file"]')
-    const file = new File(['invalid json'], 'data.json', { type: 'application/json' })
-    Object.defineProperty(file, 'text', {
-      value: () => Promise.resolve('invalid json')
-    })
-    Object.defineProperty(input.element, 'files', {
-      value: [file]
-    })
+    setInputFiles(input.element, [makeJsonFile('data.json', 'invalid json')])
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
-    await Promise.resolve()
+    await flushPromises()
 
-    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportParseFailed')
+    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportParseFailedFile')
+    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+  })
+
+  it('不是导出数据的 JSON 按文件名拒绝', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    const wrapper = mountModal()
+
+    const input = wrapper.find('input[type="file"]')
+    setInputFiles(input.element, [makeJsonFile('random.json', JSON.stringify({ name: 'test' }))])
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportInvalidFile')
+    expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
+  })
+
+  it('无有效 JSON 的选择不清空已有选择', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 1,
+      account_failed: 0
+    })
+
+    const wrapper = mountModal()
+    const input = wrapper.find('input[type="file"]')
+
+    const valid = makeJsonFile(
+      'valid.json',
+      JSON.stringify({ exported_at: '2026-07-05T00:00:00Z', proxies: [], accounts: [{ name: 'a' }] })
+    )
+    setInputFiles(input.element, [valid])
+    await input.trigger('change')
+
+    setInputFiles(input.element, [new File(['hello'], 'notes.txt', { type: 'text/plain' })])
+    await input.trigger('change')
+    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportSelectFile')
+
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        accounts: [{ name: 'a' }]
+      }),
+      skip_default_group_bind: true
+    })
+  })
+
+  it('merges multiple selected JSON files before importing', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 2,
+      account_failed: 0
+    })
+
+    const wrapper = mountModal()
+
+    const input = wrapper.find('input[type="file"]')
+    const first = makeJsonFile(
+      'first.json',
+      JSON.stringify({ exported_at: '2026-07-05T00:00:00Z', proxies: [], accounts: [{ name: 'a' }] })
+    )
+    const second = makeJsonFile(
+      'second.json',
+      JSON.stringify({
+        exported_at: '2026-07-05T00:00:01Z',
+        proxies: [{ proxy_key: 'p' }],
+        accounts: [{ name: 'b' }]
+      })
+    )
+    setInputFiles(input.element, [first, second])
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(adminAPI.accounts.importData).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        proxies: [{ proxy_key: 'p' }],
+        accounts: [{ name: 'a' }, { name: 'b' }]
+      }),
+      skip_default_group_bind: true
+    })
+    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
+  })
+
+  it('部分成功时关闭弹窗仍通知父组件刷新', async () => {
+    const { adminAPI } = await import('@/api/admin')
+    vi.mocked(adminAPI.accounts.importData).mockResolvedValue({
+      proxy_created: 0,
+      proxy_reused: 0,
+      proxy_failed: 0,
+      account_created: 1,
+      account_failed: 1
+    })
+
+    const wrapper = mountModal()
+    const input = wrapper.find('input[type="file"]')
+    setInputFiles(input.element, [
+      makeJsonFile(
+        'mixed.json',
+        JSON.stringify({
+          exported_at: '2026-07-05T00:00:00Z',
+          proxies: [],
+          accounts: [{ name: 'a' }, { name: 'b' }]
+        })
+      )
+    ])
+
+    await input.trigger('change')
+    await wrapper.find('form').trigger('submit')
+    await flushPromises()
+
+    expect(showError).toHaveBeenCalledWith('admin.accounts.dataImportCompletedWithErrors')
+    expect(wrapper.emitted('imported')).toBeUndefined()
+
+    // 第二个 btn-secondary 是 footer 的取消按钮(第一个是选择文件)
+    await wrapper.findAll('button.btn-secondary')[1]!.trigger('click')
+
+    expect(wrapper.emitted('imported')).toHaveLength(1)
+    expect(wrapper.emitted('close')).toHaveLength(1)
   })
 
   it('Codex token JSON 文件走 Codex session 导入接口', async () => {
@@ -86,15 +224,7 @@ describe('ImportDataModal', () => {
       items: [{ index: 1, action: 'created', account_id: 1734, name: 'codex-account' }]
     })
 
-    const wrapper = mount(ImportDataModal, {
-      props: { show: true },
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-        }
-      }
-    })
-
+    const wrapper = mountModal()
     const content = JSON.stringify({
       type: 'codex',
       email: 'codex@example.com',
@@ -105,17 +235,11 @@ describe('ImportDataModal', () => {
       saved_at: '2026-06-09T13:50:37Z'
     })
     const input = wrapper.find('input[type="file"]')
-    const file = new File([content], 'codex.json', { type: 'application/json' })
-    Object.defineProperty(file, 'text', {
-      value: () => Promise.resolve(content)
-    })
-    Object.defineProperty(input.element, 'files', {
-      value: [file]
-    })
+    setInputFiles(input.element, [makeJsonFile('codex.json', content)])
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
-    await Promise.resolve()
+    await flushPromises()
 
     expect(adminAPI.accounts.importCodexSession).toHaveBeenCalledWith({
       content,
@@ -124,67 +248,6 @@ describe('ImportDataModal', () => {
     })
     expect(adminAPI.accounts.importData).not.toHaveBeenCalled()
     expect(showSuccess).toHaveBeenCalledWith('Codex session 导入完成：创建 1，更新 0，跳过 0，失败 0')
-  })
-
-  it('选择多个 JSON 文件时逐个解析并导入', async () => {
-    vi.mocked(adminAPI.accounts.importData)
-      .mockResolvedValueOnce({
-        proxy_created: 0,
-        proxy_reused: 0,
-        proxy_failed: 0,
-        account_created: 1,
-        account_failed: 0
-      })
-      .mockResolvedValueOnce({
-        proxy_created: 0,
-        proxy_reused: 0,
-        proxy_failed: 0,
-        account_created: 2,
-        account_failed: 0
-      })
-
-    const wrapper = mount(ImportDataModal, {
-      props: { show: true },
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-        }
-      }
-    })
-
-    const firstPayload = { accounts: [{ name: 'account-a' }], proxies: [] }
-    const secondPayload = { accounts: [{ name: 'account-b' }, { name: 'account-c' }], proxies: [] }
-    const firstContent = JSON.stringify(firstPayload)
-    const secondContent = JSON.stringify(secondPayload)
-    const firstFile = new File([firstContent], 'accounts-a.json', { type: 'application/json' })
-    const secondFile = new File([secondContent], 'accounts-b.json', { type: 'application/json' })
-    Object.defineProperty(firstFile, 'text', {
-      value: () => Promise.resolve(firstContent)
-    })
-    Object.defineProperty(secondFile, 'text', {
-      value: () => Promise.resolve(secondContent)
-    })
-
-    const input = wrapper.find('input[type="file"]')
-    expect((input.element as HTMLInputElement).multiple).toBe(true)
-    Object.defineProperty(input.element, 'files', {
-      value: [firstFile, secondFile]
-    })
-
-    await input.trigger('change')
-    await wrapper.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(adminAPI.accounts.importData).toHaveBeenCalledTimes(2)
-    expect(adminAPI.accounts.importData).toHaveBeenNthCalledWith(1, {
-      data: firstPayload,
-      skip_default_group_bind: true
-    })
-    expect(adminAPI.accounts.importData).toHaveBeenNthCalledWith(2, {
-      data: secondPayload,
-      skip_default_group_bind: true
-    })
-    expect(showSuccess).toHaveBeenCalledWith('admin.accounts.dataImportSuccess')
   })
 
   it('选择多个 Codex token JSON 文件时逐个调用 Codex session 导入接口', async () => {
@@ -206,15 +269,7 @@ describe('ImportDataModal', () => {
         items: [{ index: 1, action: 'created', account_id: 1735, name: 'codex-account-b' }]
       })
 
-    const wrapper = mount(ImportDataModal, {
-      props: { show: true },
-      global: {
-        stubs: {
-          BaseDialog: { template: '<div><slot /><slot name="footer" /></div>' }
-        }
-      }
-    })
-
+    const wrapper = mountModal()
     const firstContent = JSON.stringify({
       type: 'codex',
       email: 'codex-a@example.com',
@@ -231,20 +286,11 @@ describe('ImportDataModal', () => {
       refresh_token: 'refresh-token-b',
       id_token: 'id-token-b'
     })
-    const firstFile = new File([firstContent], 'codex-a.json', { type: 'application/json' })
-    const secondFile = new File([secondContent], 'codex-b.json', { type: 'application/json' })
-    Object.defineProperty(firstFile, 'text', {
-      value: () => Promise.resolve(firstContent)
-    })
-    Object.defineProperty(secondFile, 'text', {
-      value: () => Promise.resolve(secondContent)
-    })
-
     const input = wrapper.find('input[type="file"]')
-    expect((input.element as HTMLInputElement).multiple).toBe(true)
-    Object.defineProperty(input.element, 'files', {
-      value: [firstFile, secondFile]
-    })
+    setInputFiles(input.element, [
+      makeJsonFile('codex-a.json', firstContent),
+      makeJsonFile('codex-b.json', secondContent)
+    ])
 
     await input.trigger('change')
     await wrapper.find('form').trigger('submit')
