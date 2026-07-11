@@ -10862,14 +10862,17 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 	// Collect unique models from all accounts
 	modelSet := make(map[string]struct{})
 	hasAnyMapping := false
+	hasUnrestrictedAccount := false
 
 	for _, acc := range accounts {
 		mapping := acc.GetModelMapping()
-		if len(mapping) > 0 {
-			hasAnyMapping = true
-			for model := range mapping {
-				modelSet[model] = struct{}{}
-			}
+		if len(mapping) == 0 {
+			hasUnrestrictedAccount = true
+			continue
+		}
+		hasAnyMapping = true
+		for model := range mapping {
+			modelSet[model] = struct{}{}
 		}
 	}
 
@@ -10880,6 +10883,11 @@ func (s *GatewayService) GetAvailableModels(ctx context.Context, groupID *int64,
 			modelsListCacheStoreTotal.Add(1)
 		}
 		return nil
+	}
+	if hasUnrestrictedAccount && platform == PlatformOpenAI {
+		for _, model := range defaultModelsListCandidateIDs(platform) {
+			modelSet[model] = struct{}{}
+		}
 	}
 
 	// Convert to slice
