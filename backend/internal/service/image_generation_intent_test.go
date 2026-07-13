@@ -106,6 +106,29 @@ func TestIsImageGenerationIntent(t *testing.T) {
 	}
 }
 
+func TestIsExplicitImageGenerationIntent(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		model    string
+		body     []byte
+		want     bool
+	}{
+		{name: "image endpoint", endpoint: "/v1/images/generations", want: true},
+		{name: "image model", endpoint: "/v1/responses", model: "gpt-image-2", want: true},
+		{name: "image tool choice", endpoint: "/v1/responses", model: "gpt-5.5", body: []byte(`{"tool_choice":{"type":"image_generation"}}`), want: true},
+		{name: "namespace image tool choice", endpoint: "/v1/responses", model: "gpt-5.5", body: []byte(`{"tool_choice":{"type":"namespace","name":"image_gen"}}`), want: true},
+		{name: "passive top level image tool", endpoint: "/v1/responses", model: "gpt-5.5", body: []byte(`{"tools":[{"type":"namespace","name":"image_gen"}]}`), want: false},
+		{name: "passive additional tools", endpoint: "/v1/responses", model: "gpt-5.5", body: []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen"}]}]}`), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, IsExplicitImageGenerationIntent(tt.endpoint, tt.model, tt.body))
+		})
+	}
+}
+
 func TestIsImageGenerationIntentMap_NamespaceImageGen(t *testing.T) {
 	tests := []struct {
 		name    string

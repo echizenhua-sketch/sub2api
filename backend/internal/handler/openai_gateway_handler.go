@@ -262,11 +262,21 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	imageIntent := service.IsImageGenerationIntent("/v1/responses", reqModel, body)
-	if imageIntent && !service.GroupAllowsImageGeneration(apiKey.Group) {
-		h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
-		return
+	if !service.GroupAllowsImageGeneration(apiKey.Group) {
+		if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, body) {
+			h.errorResponse(c, http.StatusForbidden, "permission_error", service.ImageGenerationPermissionMessage())
+			return
+		}
+		strippedBody, changed, stripErr := service.StripOpenAIImageGenerationToolsFromRawPayload(body)
+		if stripErr != nil {
+			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "Failed to parse request body")
+			return
+		}
+		if changed {
+			body = strippedBody
+		}
 	}
+	imageIntent := service.IsImageGenerationIntent("/v1/responses", reqModel, body)
 	var imageReleaseFunc func()
 	if imageIntent {
 		var imageAcquired bool
@@ -1377,9 +1387,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		return
 	}
 
-	if service.IsImageGenerationIntent("/v1/responses", reqModel, firstMessage) && !service.GroupAllowsImageGeneration(apiKey.Group) {
-		closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())
-		return
+	if !service.GroupAllowsImageGeneration(apiKey.Group) {
+		if service.IsExplicitImageGenerationIntent("/v1/responses", reqModel, firstMessage) {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, service.ImageGenerationPermissionMessage())
+			return
+		}
+		strippedMessage, changed, stripErr := service.StripOpenAIImageGenerationToolsFromRawPayload(firstMessage)
+		if stripErr != nil {
+			closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid websocket request payload")
+			return
+		}
+		if changed {
+			firstMessage = strippedMessage
+		}
 	}
 
 	// F5a: 握手层会话屏蔽检查。WS 握手无 body，显式标识仅来自握手 header

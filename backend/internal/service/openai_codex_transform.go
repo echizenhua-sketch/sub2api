@@ -750,6 +750,12 @@ func stripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool
 	return rebuilt, true, nil
 }
 
+// StripOpenAIImageGenerationToolsFromRawPayload removes image capabilities
+// from a valid Responses request while preserving every non-image tool.
+func StripOpenAIImageGenerationToolsFromRawPayload(payload []byte) ([]byte, bool, error) {
+	return stripOpenAIImageGenerationToolsFromRawPayload(payload)
+}
+
 // stripCodexSparkImageGenerationTools removes image tool declarations and choices.
 // gpt-5.3-codex-spark rejects those capabilities upstream, while Codex clients may
 // advertise them by default.

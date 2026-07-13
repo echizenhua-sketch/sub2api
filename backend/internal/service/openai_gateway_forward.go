@@ -47,6 +47,25 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	apiKey := getAPIKeyFromContext(c)
+	if !GroupAllowsImageGeneration(apiKeyGroup(apiKey)) {
+		if IsExplicitImageGenerationIntent(openAIResponsesEndpoint, reqModel, body) {
+			MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
+			c.JSON(http.StatusForbidden, gin.H{"error": gin.H{"type": "permission_error", "message": ImageGenerationPermissionMessage()}})
+			return nil, errors.New("image generation disabled for group")
+		}
+		strippedBody, changed, stripErr := stripOpenAIImageGenerationToolsFromRawPayload(body)
+		if stripErr != nil {
+			return nil, stripErr
+		}
+		if changed {
+			body = strippedBody
+			originalBody = strippedBody
+			requestView = newOpenAIRequestView(body)
+			reqModel, reqStream, promptCacheKey = requestView.Model, requestView.Stream, requestView.PromptCacheKey
+			logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Stripped passive /responses image generation tools for a disabled group")
+		}
+	}
 
 	if account.Platform == PlatformGrok {
 		return s.forwardGrokResponses(ctx, c, account, body, originalModel, reqStream, startTime)
@@ -168,7 +187,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		disablePatch()
 	}
 
-	apiKey := getAPIKeyFromContext(c)
 	imageGenerationAllowed := GroupAllowsImageGeneration(nil)
 	if apiKey != nil {
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
