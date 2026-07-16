@@ -1,0 +1,756 @@
+import AirTracker, { Environment } from '@airwallex/airtracker';
+
+/******************************************************************************
+Copyright (c) Microsoft Corporation.
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+***************************************************************************** */
+/* global Reflect, Promise, SuppressedError, Symbol */
+
+var extendStatics = function(d, b) {
+    extendStatics = Object.setPrototypeOf ||
+        ({ __proto__: [] } instanceof Array && function (d, b) { d.__proto__ = b; }) ||
+        function (d, b) { for (var p in b) if (Object.prototype.hasOwnProperty.call(b, p)) d[p] = b[p]; };
+    return extendStatics(d, b);
+};
+
+function __extends(d, b) {
+    if (typeof b !== "function" && b !== null)
+        throw new TypeError("Class extends value " + String(b) + " is not a constructor or null");
+    extendStatics(d, b);
+    function __() { this.constructor = d; }
+    d.prototype = b === null ? Object.create(b) : (__.prototype = b.prototype, new __());
+}
+
+var __assign = function() {
+    __assign = Object.assign || function __assign(t) {
+        for (var s, i = 1, n = arguments.length; i < n; i++) {
+            s = arguments[i];
+            for (var p in s) if (Object.prototype.hasOwnProperty.call(s, p)) t[p] = s[p];
+        }
+        return t;
+    };
+    return __assign.apply(this, arguments);
+};
+
+function __awaiter(thisArg, _arguments, P, generator) {
+    function adopt(value) { return value instanceof P ? value : new P(function (resolve) { resolve(value); }); }
+    return new (P || (P = Promise))(function (resolve, reject) {
+        function fulfilled(value) { try { step(generator.next(value)); } catch (e) { reject(e); } }
+        function rejected(value) { try { step(generator["throw"](value)); } catch (e) { reject(e); } }
+        function step(result) { result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected); }
+        step((generator = generator.apply(thisArg, _arguments || [])).next());
+    });
+}
+
+function __generator(thisArg, body) {
+    var _ = { label: 0, sent: function() { if (t[0] & 1) throw t[1]; return t[1]; }, trys: [], ops: [] }, f, y, t, g;
+    return g = { next: verb(0), "throw": verb(1), "return": verb(2) }, typeof Symbol === "function" && (g[Symbol.iterator] = function() { return this; }), g;
+    function verb(n) { return function (v) { return step([n, v]); }; }
+    function step(op) {
+        if (f) throw new TypeError("Generator is already executing.");
+        while (g && (g = 0, op[0] && (_ = 0)), _) try {
+            if (f = 1, y && (t = op[0] & 2 ? y["return"] : op[0] ? y["throw"] || ((t = y["return"]) && t.call(y), 0) : y.next) && !(t = t.call(y, op[1])).done) return t;
+            if (y = 0, t) op = [op[0] & 2, t.value];
+            switch (op[0]) {
+                case 0: case 1: t = op; break;
+                case 4: _.label++; return { value: op[1], done: false };
+                case 5: _.label++; y = op[1]; op = [0]; continue;
+                case 7: op = _.ops.pop(); _.trys.pop(); continue;
+                default:
+                    if (!(t = _.trys, t = t.length > 0 && t[t.length - 1]) && (op[0] === 6 || op[0] === 2)) { _ = 0; continue; }
+                    if (op[0] === 3 && (!t || (op[1] > t[0] && op[1] < t[3]))) { _.label = op[1]; break; }
+                    if (op[0] === 6 && _.label < t[1]) { _.label = t[1]; t = op; break; }
+                    if (t && _.label < t[2]) { _.label = t[2]; _.ops.push(op); break; }
+                    if (t[2]) _.ops.pop();
+                    _.trys.pop(); continue;
+            }
+            op = body.call(thisArg, _);
+        } catch (e) { op = [6, e]; y = 0; } finally { f = t = 0; }
+        if (op[0] & 5) throw op[1]; return { value: op[0] ? op[1] : void 0, done: true };
+    }
+}
+
+function __spreadArray(to, from, pack) {
+    if (pack || arguments.length === 2) for (var i = 0, l = from.length, ar; i < l; i++) {
+        if (ar || !(i in from)) {
+            if (!ar) ar = Array.prototype.slice.call(from, 0, i);
+            ar[i] = from[i];
+        }
+    }
+    return to.concat(ar || Array.prototype.slice.call(from));
+}
+
+typeof SuppressedError === "function" ? SuppressedError : function (error, suppressed, message) {
+    var e = new Error(message);
+    return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
+};
+
+var name = "@airwallex/components-sdk";
+var version = "1.30.1";
+var main = "./lib/index.js";
+var module = "./lib/index.mjs";
+var types = "./lib/index.d.ts";
+var files = [
+	"lib/**"
+];
+var license = "MIT";
+var scripts = {
+	"load-types": "node ./load-types.js && yarn prettier -w src/types/*d.ts",
+	prebuild: "yarn clean",
+	build: "yarn rollup --config",
+	postbuild: "yarn bundle-types",
+	"bundle-types": "dts-bundle-generator -o ./lib/index.d.ts ./src/index.ts",
+	clean: "rm -rf dist lib",
+	lint: "eslint \"src/**/*.ts*\"",
+	test: "jest",
+	sonar: "sonar-scanner",
+	release: "semantic-release",
+	"lint-stage": "lint-staged",
+	prepare: "husky"
+};
+var prettier = {
+	semi: true,
+	singleQuote: true,
+	printWidth: 80,
+	trailingComma: "all"
+};
+var publishConfig = {
+	access: "public"
+};
+var devDependencies = {
+	"@babel/preset-typescript": "^7.18.6",
+	"@rollup/plugin-commonjs": "^25.0.7",
+	"@rollup/plugin-json": "^6.1.0",
+	"@rollup/plugin-node-resolve": "^15.2.3",
+	"@rollup/plugin-terser": "^0.4.4",
+	"@rollup/plugin-typescript": "^11.1.6",
+	"@semantic-release/changelog": "^5.0.1",
+	"@semantic-release/commit-analyzer": "^8.0.1",
+	"@semantic-release/git": "^9.0.0",
+	"@semantic-release/gitlab": "^6.1.0",
+	"@semantic-release/release-notes-generator": "^9.0.0",
+	"@swc/core": "^1.3.46",
+	"@types/jest": "^29.5.0",
+	"@typescript-eslint/eslint-plugin": "^5.57.0",
+	"@typescript-eslint/parser": "^5.57.0",
+	"dts-bundle-generator": "^9.0.0",
+	eslint: "^7.23.0",
+	"eslint-config-prettier": "^8.3.0",
+	"eslint-plugin-prettier": "^5.1.3",
+	husky: "^9.0.11",
+	jest: "^29.5.0",
+	"jest-environment-jsdom": "^29.5.0",
+	"lint-staged": "^15.2.7",
+	prettier: "^3.3.2",
+	rollup: "^4.9.6",
+	"semantic-release": "^17.3.8",
+	"sonarqube-scanner": "^3.0.1",
+	"ts-jest": "^29.0.5",
+	"ts-loader": "^9.5.1",
+	tslib: "^2.6.2",
+	typescript: "^4.5.2"
+};
+var dependencies = {
+	"@airwallex/airtracker": "^3.0.0"
+};
+var packageJson = {
+	name: name,
+	version: version,
+	main: main,
+	module: module,
+	types: types,
+	files: files,
+	license: license,
+	scripts: scripts,
+	prettier: prettier,
+	"lint-staged": {
+	"src/**/*.{ts,tsx}": [
+		"yarn lint"
+	],
+	"src/**/*.{js,jsx,ts,tsx,json,css,scss,md}": "prettier --write"
+},
+	publishConfig: publishConfig,
+	devDependencies: devDependencies,
+	dependencies: dependencies
+};
+
+var airTrackerENV = {
+    dev: Environment.staging,
+    staging: Environment.staging,
+    demo: Environment.demo,
+    prod: Environment.production
+};
+var initializeAirTracker = function (env, clientId) {
+    if (env === void 0) { env = Environment.production; }
+    if (!window._AirwallexSDKs.airTracker) {
+        window._AirwallexSDKs.airTracker = new AirTracker({
+            config: {
+                appName: 'components-sdk',
+                appVersion: packageJson.version,
+                env: airTrackerENV[env] || Environment.production
+            }
+        });
+        window._AirwallexSDKs.airTracker.updateCommonData({ clientId: clientId });
+    }
+    return window._AirwallexSDKs.airTracker;
+};
+var maskPII = function (data) {
+    if (typeof data !== 'object') {
+        return data;
+    }
+    try {
+        var result_1 = JSON.parse(JSON.stringify(data));
+        Object.keys(result_1).forEach(function (key) {
+            if (typeof key === 'string' &&
+                ['auth', 'code'].some(function (sens) { return key.includes(sens); })) {
+                result_1[key] = '***';
+            }
+        });
+        return result_1;
+    }
+    catch (_a) {
+        return data;
+    }
+};
+var logError = function (eventName, data) {
+    var _a, _b;
+    (_b = (_a = window._AirwallexSDKs) === null || _a === void 0 ? void 0 : _a.airTracker) === null || _b === void 0 ? void 0 : _b.error(eventName, __assign(__assign({}, data), { context: 'components-sdk' }));
+};
+var logWarning = function (eventName, data) {
+    var _a;
+    (_a = window._AirwallexSDKs.airTracker) === null || _a === void 0 ? void 0 : _a.warn(eventName, __assign(__assign({}, data), { context: 'components-sdk' }));
+};
+var logInfo = function (eventName, data) {
+    var _a;
+    (_a = window._AirwallexSDKs.airTracker) === null || _a === void 0 ? void 0 : _a.info(eventName, __assign(__assign({}, data), { context: 'components-sdk' }));
+};
+
+var LoadScriptError = /** @class */ (function (_super) {
+    __extends(LoadScriptError, _super);
+    function LoadScriptError(message) {
+        var _this = _super.call(this, message) || this;
+        _this.code = 'LOAD_SCRIPT_ERROR';
+        return _this;
+    }
+    return LoadScriptError;
+}(Error));
+
+var _a, _b;
+var ENV;
+(function (ENV) {
+    ENV["dev"] = "dev";
+    ENV["staging"] = "staging";
+    ENV["demo"] = "demo";
+    ENV["prod"] = "prod";
+    ENV["sandbox"] = "sandbox";
+})(ENV || (ENV = {}));
+var PA_STATIC_HOST = (_a = {},
+    _a[ENV.dev] = 'https://checkout-staging.airwallex.com',
+    _a[ENV.staging] = 'https://checkout-staging.airwallex.com',
+    _a[ENV.demo] = 'https://checkout-demo.airwallex.com',
+    _a[ENV.prod] = 'https://checkout.airwallex.com',
+    _a[ENV.sandbox] = 'https://checkout.sandbox.airwallex.com',
+    _a);
+var STATIC_HOST = (_b = {},
+    _b[ENV.dev] = 'https://static-staging.airwallex.com',
+    _b[ENV.staging] = 'https://static-staging.airwallex.com',
+    _b[ENV.demo] = 'https://static-demo.airwallex.com',
+    _b[ENV.prod] = 'https://static.airwallex.com',
+    _b[ENV.sandbox] = 'https://static.sandbox.airwallex.com',
+    _b);
+var SDK_CONTROLLER = 'sdkController';
+var PAYMENTS = 'payments';
+var SDK_URL_MAPPING = {
+    kyc: '/widgets/kyc/sdk/v1/index.js',
+    rfi: '/widgets/kycRfi/sdk/v1/index.js',
+    paymentsKyb: '/widgets/paymentsKyb/sdk/v1/index.js',
+    sdkController: '/widgets/sdk-controller/sdk/v1/index.js',
+    payouts: '/widgets/payouts/sdk/v1/index.js',
+    payments: '/assets/elements.bundle.min.js',
+    sca: '/hosted-sca/sdk/v1/index.js',
+    taxForm: '/widgets/taxForm/sdk/v1/index.js'
+};
+var ELEMENT_TO_SDK = {
+    // legacy
+    kyc: 'kyc',
+    paymentsKyb: 'paymentsKyb',
+    // rfi elements
+    kycRfi: 'rfi',
+    transactionRfi: 'rfi',
+    paymentEnablementRfi: 'rfi',
+    lendingRfi: 'rfi',
+    mrmRfi: 'rfi',
+    // payouts elements
+    payoutForm: 'payouts',
+    beneficiaryForm: 'payouts',
+    // payment elements
+    hpp: 'payments',
+    cvc: 'payments',
+    card: 'payments',
+    expiry: 'payments',
+    dropIn: 'payments',
+    cardNumber: 'payments',
+    applePayButton: 'payments',
+    googlePayButton: 'payments',
+    krCardNumber: 'payments',
+    krCardIdentifier: 'payments',
+    krCardExpiry: 'payments',
+    krCardPswFirstTwo: 'payments',
+    // sca elements
+    scaSetup: 'sca',
+    scaVerify: 'sca',
+    scaManagement: 'sca',
+    taxForm: 'taxForm'
+};
+var ELEMENT_GROUP_TO_ELEMENT = {
+    payments: [
+        'hpp',
+        'cvc',
+        'card',
+        'expiry',
+        'dropIn',
+        'cardNumber',
+        'applePayButton',
+        'googlePayButton',
+        'krCardNumber',
+        'krCardIdentifier',
+        'krCardExpiry',
+        'krCardPswFirstTwo',
+    ],
+    payouts: ['payoutForm', 'beneficiaryForm'],
+    onboarding: ['kyc', 'paymentsKyb'],
+    risk: [
+        'scaSetup',
+        'scaVerify',
+        'scaManagement',
+        'transactionRfi',
+        'kycRfi',
+        'paymentEnablementRfi',
+        'lendingRfi',
+        'mrmRfi',
+    ]
+};
+var DOMAIN_FUNCTIONS_NAMESPACES = ['payments', 'sca'];
+
+var InvalidStaticResourceError = /** @class */ (function (_super) {
+    __extends(InvalidStaticResourceError, _super);
+    function InvalidStaticResourceError(message) {
+        var _this = _super.call(this, message) || this;
+        _this.code = 'INVALID_STATIC_RESOURCE_ERROR';
+        return _this;
+    }
+    return InvalidStaticResourceError;
+}(Error));
+
+var timestamp = Date.now();
+var isElementGroup = function (name) { return Object.keys(ELEMENT_GROUP_TO_ELEMENT).includes(name); };
+var sleep = function (delay) {
+    if (delay === void 0) { delay = 500; }
+    return new Promise(function (resolve) { return window.setTimeout(resolve, delay); });
+};
+var getSDKByElementName = function (elementName) {
+    return ELEMENT_TO_SDK[elementName];
+};
+var getHost = function (name, env) {
+    var host = name === PAYMENTS ? PA_STATIC_HOST : STATIC_HOST;
+    return host[env] || host.prod;
+};
+/**
+ * get the elements and sdks that need registry by controller
+ * @param enabledElements the enabledElements passed in init params
+ * @returns array of deduplicated elementName pair with sdkName
+ */
+var getSDKsByEnabledElements = function (enabledElements) {
+    // e.g., ['hpp', 'payoutForm', 'kyc', 'kyc']
+    var usedElements = enabledElements.reduce(function (elementArr, enabledEle) {
+        return elementArr.concat(isElementGroup(enabledEle)
+            ? ELEMENT_GROUP_TO_ELEMENT[enabledEle]
+            : enabledEle);
+    }, []);
+    return Array.from(new Set(usedElements)).map(function (elementName) { return ({
+        elementName: elementName,
+        sdkName: getSDKByElementName(elementName)
+    }); });
+};
+var getFunctionsByEnabledElements = function (enabledElements) {
+    return Array.from(new Set(getSDKsByEnabledElements(enabledElements)
+        .map(function (_a) {
+        var sdkName = _a.sdkName;
+        return sdkName;
+    })
+        .filter(function (usedSdkName) {
+        return DOMAIN_FUNCTIONS_NAMESPACES.includes(usedSdkName);
+    })));
+};
+var getWindowSDKInstanceName = function (name) {
+    return name === 'payments' ? 'payment' : name;
+};
+/**
+ * get the CDN url of a specific package
+ * @param name declare the element name
+ * @param env the environment of package
+ * @returns string the CDN url
+ */
+var getSDKUrl = function (_a) {
+    var name = _a.name, _b = _a.env, env = _b === void 0 ? ENV.prod : _b;
+    var staticHost = getHost(name, env);
+    var elementUri = SDK_URL_MAPPING[name];
+    if (!elementUri) {
+        logError('[components-sdk] Element static resource not found', {
+            sdkName: name
+        });
+        throw new InvalidStaticResourceError("Element ".concat(name, " static resource URL is invalid."));
+    }
+    return "".concat(staticHost).concat(elementUri, "?ts=").concat(timestamp);
+};
+var getFunctionsInstanceWithNamespace = function () {
+    return DOMAIN_FUNCTIONS_NAMESPACES.reduce(function (result, namespace) {
+        var _a;
+        return (__assign(__assign({}, result), (_a = {}, _a[namespace] = window._AirwallexSDKs.__controller__.internalSDKs[namespace], _a)));
+    }, {});
+};
+var now = function () { return Math.floor(performance.now()); };
+
+var createScript = function (url) {
+    var script = document.createElement('script');
+    script.src = url;
+    script.type = 'module';
+    var parentDom = document.head || document.body;
+    parentDom.appendChild(script);
+    return script;
+};
+var MAX_RETRY_COUNT = 3;
+var loadScript = function (url) { return __awaiter(void 0, void 0, void 0, function () {
+    var retryCount, tryToResolve;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                if (typeof window === 'undefined') {
+                    throw new Error('Please load script in browser environment');
+                }
+                retryCount = 0;
+                tryToResolve = function () { return __awaiter(void 0, void 0, void 0, function () {
+                    var start, urlObj, script;
+                    return __generator(this, function (_a) {
+                        start = now();
+                        if (retryCount > 0 && url.includes('?ts=')) {
+                            urlObj = new URL(url, window.location.href);
+                            urlObj.searchParams.set('ts', "".concat(Date.now()));
+                            url = urlObj.toString();
+                        }
+                        script = createScript(url);
+                        return [2 /*return*/, new Promise(function (resolve, reject) {
+                                script.addEventListener('load', function () {
+                                    var end = now();
+                                    logInfo('[components-sdk] SDK script loaded', {
+                                        scriptUrl: url,
+                                        start: start,
+                                        latency: end - start,
+                                        end: end,
+                                        retryCount: retryCount
+                                    });
+                                    resolve(true);
+                                });
+                                script.addEventListener('error', function (err) {
+                                    script.remove();
+                                    console.error(err);
+                                    var end = now();
+                                    logError('[components-sdk] Failed to load script', {
+                                        scriptUrl: url,
+                                        error: err,
+                                        start: start,
+                                        latency: end - start,
+                                        end: end,
+                                        retryCount: retryCount
+                                    });
+                                    reject(new LoadScriptError("Failed to load Airwallex SDK scripts: ".concat(url)));
+                                });
+                            })];
+                    });
+                }); };
+                _a.label = 1;
+            case 1:
+                if (!(retryCount < MAX_RETRY_COUNT)) return [3 /*break*/, 7];
+                _a.label = 2;
+            case 2:
+                _a.trys.push([2, 4, , 6]);
+                return [4 /*yield*/, tryToResolve()];
+            case 3: return [2 /*return*/, _a.sent()];
+            case 4:
+                _a.sent();
+                retryCount++;
+                return [4 /*yield*/, sleep()];
+            case 5:
+                _a.sent();
+                return [3 /*break*/, 6];
+            case 6: return [3 /*break*/, 1];
+            case 7:
+                logError('[components-sdk] Failed to load script after retry', {
+                    scriptUrl: url,
+                    retryCount: retryCount
+                });
+                throw new LoadScriptError("Failed to load Airwallex SDK scripts: ".concat(url));
+        }
+    });
+}); };
+
+var InstanceNotFoundError = /** @class */ (function (_super) {
+    __extends(InstanceNotFoundError, _super);
+    function InstanceNotFoundError(message) {
+        var _this = _super.call(this, message) || this;
+        _this.code = 'INSTANCE_NOT_FOUND_ERROR';
+        return _this;
+    }
+    return InstanceNotFoundError;
+}(Error));
+
+var initPromise;
+/**
+ * ensure one script one promise
+ */
+var promiseMap = new Map();
+/**
+ * get the Promise to load the element script
+ * @param scriptName declare the SDK or Functions namespace
+ * @param env the resource url
+ * @returns Promise to load the script
+ */
+var getLoadScriptPromise = function (_a) {
+    var env = _a.env, scriptName = _a.scriptName;
+    var url = getSDKUrl({ name: scriptName, env: env });
+    // if promise was made
+    var sdkPromise = promiseMap.get(scriptName);
+    if (sdkPromise) {
+        return sdkPromise;
+    }
+    var loadScriptPromise = loadScript(url);
+    promiseMap.set(scriptName, loadScriptPromise);
+    return loadScriptPromise;
+};
+/**
+ * SDK init, load controller script
+ * @param options SDK init options
+ * @returns Promise to load the script
+ */
+var init = function (options) { return __awaiter(void 0, void 0, void 0, function () {
+    return __generator(this, function (_a) {
+        if (typeof window === 'undefined') {
+            throw new Error('Please call the `init()` function in a browser environment.');
+        }
+        // initialize airTracker
+        initializeAirTracker(options.env, options.clientId);
+        logInfo('[components-sdk] SDK init start', {
+            options: maskPII(options),
+            start: now()
+        });
+        initPromise = new Promise(function (resolve, reject) {
+            var _a;
+            var initOptions = __assign(__assign({}, options), { env: options.env && ENV[options.env] ? options.env : ENV.prod });
+            window.AirwallexComponentsSDK.__env__ = initOptions.env;
+            // load SDK controller script
+            var controllerPromise = getLoadScriptPromise({
+                env: initOptions.env,
+                scriptName: SDK_CONTROLLER
+            }).then(function () { return window._AirwallexSDKs.__controller__.init(initOptions); });
+            // For old version backward compatibility
+            var enabledElements = (_a = options.enabledElements) !== null && _a !== void 0 ? _a : [];
+            var functionsNamespaces = getFunctionsByEnabledElements(enabledElements);
+            // load SDK functions scripts
+            var functionsPromises = functionsNamespaces.map(function (functionsNamespace) {
+                return getLoadScriptPromise({
+                    env: initOptions.env,
+                    scriptName: functionsNamespace
+                })
+                    .then(function () { return controllerPromise; })
+                    .then(function () {
+                    var instance = window._AirwallexSDKs[getWindowSDKInstanceName(functionsNamespace)];
+                    if (!instance) {
+                        logError('[components-sdk] SDK instance not found', {
+                            functionsNamespace: functionsNamespace,
+                            windowSDKInstanceName: getWindowSDKInstanceName(functionsNamespace)
+                        });
+                        throw new InstanceNotFoundError("SDK instance not found");
+                    }
+                    return window._AirwallexSDKs.__controller__.registerFunctions({
+                        functionsNamespace: functionsNamespace,
+                        instance: instance
+                    });
+                });
+            });
+            // load SDK elements scripts
+            var enabledSDKs = getSDKsByEnabledElements(enabledElements);
+            var elementsPromises = enabledSDKs.map(function (_a) {
+                var sdkNamespace = _a.sdkName, elementName = _a.elementName;
+                return getLoadScriptPromise({
+                    scriptName: sdkNamespace,
+                    env: initOptions.env
+                })
+                    .then(function () { return controllerPromise; })
+                    .then(function () {
+                    var instance = window._AirwallexSDKs[getWindowSDKInstanceName(sdkNamespace)];
+                    if (!instance) {
+                        logError('[components-sdk] SDK instance not found', {
+                            sdkName: sdkNamespace,
+                            windowSDKInstanceName: getWindowSDKInstanceName(sdkNamespace)
+                        });
+                        throw new InstanceNotFoundError("SDK instance not found");
+                    }
+                    return window._AirwallexSDKs.__controller__.registerElement({
+                        sdkName: sdkNamespace,
+                        elementName: elementName,
+                        instance: instance
+                    });
+                });
+            });
+            Promise.all(__spreadArray(__spreadArray([controllerPromise], functionsPromises, true), elementsPromises, true))
+                .then(function () {
+                logInfo('[components-sdk] SDK initialized', {
+                    options: maskPII(options),
+                    start: now()
+                });
+                resolve(getFunctionsInstanceWithNamespace());
+            })["catch"](function (error) {
+                if (!error.code) {
+                    logError('[components-sdk] Unexpected errors when init', { error: error });
+                }
+                reject(error);
+            });
+        });
+        return [2 /*return*/, initPromise];
+    });
+}); };
+/**
+ * load SDK element script and call SDK instance.createElement.
+ * @param elementName the element name to create
+ * @param options createElement options
+ * @returns return type of SDK instance.createElement
+ */
+var createElement = function (elementName, options) { return __awaiter(void 0, void 0, void 0, function () {
+    var sdkName, start, elementInstance, end, error_1;
+    return __generator(this, function (_a) {
+        switch (_a.label) {
+            case 0:
+                if (!elementName) {
+                    throw new Error('Element type is missing. Please specify a valid element.');
+                }
+                logInfo('[components-sdk] SDK createElement start', {
+                    elementName: elementName,
+                    options: maskPII(options),
+                    timestamp: now()
+                });
+                if (!initPromise) {
+                    logWarning('[components-sdk] Did not call init before createElement');
+                    throw new Error('Please initialize the Element before creating it.');
+                }
+                return [4 /*yield*/, initPromise];
+            case 1:
+                _a.sent();
+                sdkName = getSDKByElementName(elementName);
+                if (!sdkName) {
+                    throw new Error("`createElement()` with type `".concat(elementName, "` is not supported. Please specify a valid Element type."));
+                }
+                start = now();
+                _a.label = 2;
+            case 2:
+                _a.trys.push([2, 6, , 7]);
+                return [4 /*yield*/, getLoadScriptPromise({
+                        scriptName: sdkName,
+                        env: window.AirwallexComponentsSDK.__env__ || ENV.prod
+                    })];
+            case 3:
+                _a.sent();
+                return [4 /*yield*/, window._AirwallexSDKs.__controller__.registerElement({
+                        sdkName: sdkName,
+                        elementName: elementName,
+                        instance: window._AirwallexSDKs[getWindowSDKInstanceName(sdkName)]
+                    })];
+            case 4:
+                _a.sent();
+                return [4 /*yield*/, window._AirwallexSDKs.__controller__.createElement(elementName, options)];
+            case 5:
+                elementInstance = _a.sent();
+                end = now();
+                logInfo('[components-sdk] SDK createElement being called', {
+                    elementName: elementName,
+                    options: maskPII(options),
+                    start: start,
+                    latency: end - start,
+                    end: end
+                });
+                return [3 /*break*/, 7];
+            case 6:
+                error_1 = _a.sent();
+                if (!error_1.code) {
+                    logError('[components-sdk] Unexpected errors when createElement', {
+                        error: error_1
+                    });
+                }
+                else {
+                    throw error_1;
+                }
+                return [3 /*break*/, 7];
+            case 7: return [2 /*return*/, elementInstance];
+        }
+    });
+}); };
+
+/**
+ * List of scripts to prefetch
+ */
+var PREFETCH_SCRIPT_LIST = [SDK_CONTROLLER, PAYMENTS];
+/**
+ * Prefetch scripts by preload link, only for production as there's no environment context before SDK init
+ */
+var prefetchScripts = function () {
+    PREFETCH_SCRIPT_LIST.forEach(function (scriptName) {
+        var url = getSDKUrl({ name: scriptName, env: ENV.prod });
+        var preloadLink = document.createElement('link');
+        preloadLink.href = url;
+        preloadLink.rel = 'modulepreload';
+        preloadLink.as = 'script';
+        var parentDom = document.head || document.body;
+        parentDom.appendChild(preloadLink);
+    });
+};
+/**
+ * @airwallex/components-sdk may run in node environment, e.g., in Next.js
+ * Prefetch scripts only in browser environment
+ */
+var isNode = typeof document === 'undefined' || typeof window === 'undefined';
+if (!isNode) {
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', prefetchScripts);
+    }
+    else {
+        prefetchScripts();
+    }
+}
+
+if (typeof window !== 'undefined') {
+    if (!window.AirwallexComponentsSDK) {
+        Object.defineProperties(window, {
+            AirwallexComponentsSDK: {
+                value: {},
+                writable: false
+            },
+            _AirwallexSDKs: {
+                value: {},
+                writable: false
+            }
+        });
+    }
+    window.AirwallexComponentsSDK.init = init;
+    window.AirwallexComponentsSDK.createElement = createElement;
+}
+
+export { createElement, init };
