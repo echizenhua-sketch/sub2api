@@ -206,7 +206,11 @@ func (s *OpenAIGatewayService) applyGrokForbiddenPolicy(ctx context.Context, acc
 		return false
 	}
 
-	matches := matchTempUnschedulableRules(account, http.StatusForbidden, responseBody)
+	rules := account.GetTempUnschedulableRules()
+	if s != nil && s.rateLimitService != nil {
+		rules = s.rateLimitService.effectiveTempUnschedulableRules(ctx, account)
+	}
+	matches := matchTempUnschedulableRules(http.StatusForbidden, responseBody, rules)
 	if len(matches) == 0 {
 		return false
 	}
