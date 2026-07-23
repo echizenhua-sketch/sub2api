@@ -445,6 +445,7 @@
     <ScheduledTestsPanel :show="showSchedulePanel" :account-id="scheduleAcc?.id ?? null" :model-options="scheduleModelOptions" @close="closeSchedulePanel" />
     <AccountActionMenu :show="menu.show" :account="menu.acc" :position="menu.pos" @close="menu.show = false" @test="handleTest" @stats="handleViewStats" @schedule="handleSchedule" @duplicate="handleDuplicateAccount" @reauth="handleReAuth" @refresh-token="handleRefresh" @recover-state="handleRecoverState" @reset-quota="handleResetQuota" @set-privacy="handleSetPrivacy" @create-spark-shadow="handleCreateSparkShadow" />
     <SyncFromCrsModal :show="showSync" @close="showSync = false" @synced="reload" />
+    <ImportKiroModal :show="showImportKiro" @close="showImportKiro = false" @imported="handleKiroImported" />
     <ImportDataModal :show="showImportData" @close="showImportData = false" @imported="handleDataImported" />
     <BulkEditAccountModal
       :show="showBulkEdit"
@@ -496,6 +497,7 @@ import AccountTableFilters from '@/components/admin/account/AccountTableFilters.
 import AccountBulkActionsBar from '@/components/admin/account/AccountBulkActionsBar.vue'
 import AccountActionMenu from '@/components/admin/account/AccountActionMenu.vue'
 import ImportDataModal from '@/components/admin/account/ImportDataModal.vue'
+import ImportKiroModal from '@/components/admin/account/ImportKiroModal.vue'
 import ReAuthAccountModal from '@/components/admin/account/ReAuthAccountModal.vue'
 import AccountTestModal from '@/components/admin/account/AccountTestModal.vue'
 import AccountStatsModal from '@/components/admin/account/AccountStatsModal.vue'
@@ -570,6 +572,7 @@ const showCreate = ref(false)
 const showEdit = ref(false)
 const showSync = ref(false)
 const showImportData = ref(false)
+const showImportKiro = ref(false)
 const showExportDataDialog = ref(false)
 const includeProxyOnExport = ref(true)
 const showBulkEdit = ref(false)
@@ -1064,6 +1067,7 @@ const isAnyModalOpen = computed(() => {
     showEdit.value ||
     showSync.value ||
     showImportData.value ||
+    showImportKiro.value ||
     showExportDataDialog.value ||
     showBulkEdit.value ||
     showTempUnsched.value ||
@@ -1222,6 +1226,13 @@ const toggleAccountToolsDropdown = () => {
 const openSyncFromCrs = () => {
   closeAccountToolsDropdown()
   showSync.value = true
+}
+
+const handleKiroImported = () => { showImportKiro.value = false; reload() }
+
+const openImportKiro = () => {
+  showAccountToolsDropdown.value = false
+  showImportKiro.value = true
 }
 
 const openImportData = () => {
