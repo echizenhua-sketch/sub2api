@@ -150,7 +150,7 @@ func TestKiroOAuthService_RefreshOIDC(t *testing.T) {
 	s := NewKiroOAuthService()
 	// Override the URL helper isn't possible from outside; we exercise the JSON
 	// path of doJSONRequest + parseRefreshResponse via a manual call shape.
-	body := mustJSON(kiroOidcRefreshRequest{
+	body := mustJSONBytes(kiroOidcRefreshRequest{
 		ClientID: "C1", ClientSecret: "C2", RefreshToken: "RT", GrantType: "refresh_token",
 	})
 	respBody, err := s.doJSONRequest(context.Background(), srv.URL+"/token", body, nil)
@@ -209,7 +209,7 @@ func TestKiroUserAgent_FormatStable(t *testing.T) {
 	}
 }
 
-func mustJSON(v any) []byte {
+func mustJSONBytes(v any) []byte {
 	b, err := json.Marshal(v)
 	if err != nil {
 		panic(err)

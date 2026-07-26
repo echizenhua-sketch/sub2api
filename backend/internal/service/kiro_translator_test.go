@@ -26,7 +26,7 @@ func newTestKiroAccount(loginType string) *Account {
 func TestAnthropicToKiro_BasicSystemAndUser(t *testing.T) {
 	t.Parallel()
 
-	body := mustJSON(map[string]any{
+	body := mustJSONBytes(map[string]any{
 		"model":  "claude-sonnet-4-5",
 		"system": "you are helpful",
 		"messages": []any{
@@ -79,7 +79,7 @@ func TestAnthropicToKiro_BasicSystemAndUser(t *testing.T) {
 
 func TestAnthropicToKiro_ToolUseAndResult(t *testing.T) {
 	t.Parallel()
-	body := mustJSON(map[string]any{
+	body := mustJSONBytes(map[string]any{
 		"model": "claude-sonnet-4-5",
 		"messages": []any{
 			map[string]any{"role": "user", "content": "what's the weather"},
@@ -99,9 +99,9 @@ func TestAnthropicToKiro_ToolUseAndResult(t *testing.T) {
 				"role": "user",
 				"content": []any{
 					map[string]any{
-						"type":         "tool_result",
-						"tool_use_id":  "tu_1",
-						"content":      "sunny",
+						"type":        "tool_result",
+						"tool_use_id": "tu_1",
+						"content":     "sunny",
 					},
 				},
 			},
@@ -141,7 +141,7 @@ func TestAnthropicToKiro_ToolUseAndResult(t *testing.T) {
 
 func TestAnthropicToKiro_ToolsOnlyOnCurrentMessage(t *testing.T) {
 	t.Parallel()
-	body := mustJSON(map[string]any{
+	body := mustJSONBytes(map[string]any{
 		"model": "claude-sonnet-4-5",
 		"messages": []any{
 			map[string]any{"role": "user", "content": "hi"},

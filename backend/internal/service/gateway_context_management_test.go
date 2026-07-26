@@ -216,7 +216,6 @@ func TestComputeFinalAnthropicBeta_APIKeyHaiku_StillUsesAPIKeyBetas(t *testing.T
 	require.False(t, anthropicBetaTokensContains(final, claude.BetaOAuth))
 	require.False(t, anthropicBetaTokensContains(final, claude.BetaClaudeCode))
 }
-}
 
 // ============================================================================
 // computeFinalCountTokensAnthropicBeta

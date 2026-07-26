@@ -563,7 +563,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityClearsForceRefreshOnSuc
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	until := time.Now().Add(10 * time.Minute)
 	account := &Account{
 		ID:                     3709,
@@ -600,7 +600,7 @@ func TestTokenRefreshService_RefreshWithRetry_AntigravityForceRefreshInvalidGran
 			RetryBackoffSeconds: 0,
 		},
 	}
-	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	account := &Account{
 		ID:       3710,
 		Platform: PlatformAntigravity,
@@ -1051,7 +1051,7 @@ func TestPathA_GrokSuccessPersistenceFailureContainsProviderWithoutRetryOrMutati
 		MaxRetries:          3,
 		RetryBackoffSeconds: 0,
 	}}
-	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, nil, cfg, nil)
 	svc.SetRefreshAPI(NewOAuthRefreshAPI(repo, nil))
 	refresher := &tokenRefresherStub{credentials: map[string]any{
 		"access_token":  "provider-access",
@@ -1089,7 +1089,7 @@ func TestPathA_GrokSuccessPublishesDurableSchedulingState(t *testing.T) {
 	repo.accountsByID = map[int64]*Account{account.ID: account}
 	scheduler := &tokenRefreshSchedulerCache{}
 	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{MaxRetries: 1}}
-	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, scheduler, cfg, nil)
+	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, scheduler, cfg, nil)
 	svc.SetRefreshAPI(NewOAuthRefreshAPI(repo, nil))
 	refresher := &tokenRefresherStub{credentials: map[string]any{
 		"access_token":  "provider-access",
@@ -1134,7 +1134,7 @@ func TestPathA_GrokCancelAfterSuccessCASUsesDetachedDurableStateAndInvalidatesCa
 	scheduler := &tokenRefreshSchedulerCache{}
 	cache := &mockTokenCacheForRefreshAPI{lockResult: true}
 	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{MaxRetries: 1}}
-	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, invalidator, scheduler, cfg, nil)
+	svc := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, invalidator, scheduler, cfg, nil)
 	svc.SetRefreshAPI(NewOAuthRefreshAPI(repo, cache))
 	refresher := &tokenRefresherStub{credentials: map[string]any{
 		"access_token":  "provider-access",
