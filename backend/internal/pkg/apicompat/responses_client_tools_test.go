@@ -62,6 +62,87 @@ func TestAdaptResponsesClientTools_LowersDeclarationsHistoryChoiceAndNamespaces(
 	require.Equal(t, "team__send", namespaceCall["name"])
 }
 
+// Codex Desktop emits tool_search_output with a `tools` array plus a `status`
+// field instead of an `output` string; Grok rejects that ModelInput variant.
+func TestAdaptResponsesClientTools_DesktopToolSearchOutputToolsField(t *testing.T) {
+	req := map[string]any{
+		"tools": []any{map[string]any{"type": "tool_search"}},
+		"input": []any{
+			map[string]any{"type": "tool_search_call", "call_id": "s1", "arguments": map[string]any{"query": "git"}, "execution": "client"},
+			map[string]any{
+				"type":    "tool_search_output",
+				"call_id": "s1",
+				"status":  "completed",
+				"tools":   []any{map[string]any{"name": "git__log"}},
+			},
+		},
+	}
+
+	_, changed, err := AdaptResponsesClientTools(req)
+	require.NoError(t, err)
+	require.True(t, changed)
+
+	input := requireResponsesClientToolValue[[]any](t, req["input"])
+	call := requireResponsesClientToolValue[map[string]any](t, input[0])
+	require.Equal(t, "function_call", call["type"])
+	require.NotContains(t, call, "execution")
+	output := requireResponsesClientToolValue[map[string]any](t, input[1])
+	require.Equal(t, "function_call_output", output["type"])
+	require.JSONEq(t, `[{"name":"git__log"}]`, requireResponsesClientToolValue[string](t, output["output"]))
+	require.NotContains(t, output, "tools")
+	require.NotContains(t, output, "status")
+}
+
+// A follow-up turn may drop the tool_search declaration while its history items
+// remain; they must still be lowered and the proxy tool re-declared.
+func TestAdaptResponsesClientTools_ToolSearchHistoryWithoutToolDeclaration(t *testing.T) {
+	req := map[string]any{
+		"tools": []any{map[string]any{"type": "function", "name": "shell"}},
+		"input": []any{
+			map[string]any{"type": "tool_search_call", "call_id": "s1", "arguments": map[string]any{"query": "git"}},
+			map[string]any{"type": "tool_search_output", "call_id": "s1", "tools": []any{}},
+		},
+	}
+
+	mapping, changed, err := AdaptResponsesClientTools(req)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, mapping.ToolSearch)
+
+	tools := requireResponsesClientToolValue[[]any](t, req["tools"])
+	require.Len(t, tools, 2)
+	proxy := requireResponsesClientToolValue[map[string]any](t, tools[1])
+	require.Equal(t, toolSearchProxyName, proxy["name"])
+
+	input := requireResponsesClientToolValue[[]any](t, req["input"])
+	require.Equal(t, "function_call", requireResponsesClientToolValue[map[string]any](t, input[0])["type"])
+	require.Equal(t, "function_call_output", requireResponsesClientToolValue[map[string]any](t, input[1])["type"])
+}
+
+func TestAdaptResponsesClientTools_CustomToolHistoryWithoutDeclaration(t *testing.T) {
+	req := map[string]any{
+		"tools": []any{map[string]any{"type": "function", "name": "shell"}},
+		"input": []any{
+			map[string]any{"type": "custom_tool_call", "call_id": "c1", "name": "exec", "input": "dir"},
+			map[string]any{"type": "custom_tool_call_output", "call_id": "c1", "output": "ok"},
+		},
+	}
+
+	mapping, changed, err := AdaptResponsesClientTools(req)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.True(t, mapping.CustomTools["exec"])
+
+	tools := requireResponsesClientToolValue[[]any](t, req["tools"])
+	require.Len(t, tools, 2)
+	require.Equal(t, "exec", requireResponsesClientToolValue[map[string]any](t, tools[1])["name"])
+
+	input := requireResponsesClientToolValue[[]any](t, req["input"])
+	call := requireResponsesClientToolValue[map[string]any](t, input[0])
+	require.Equal(t, "function_call", call["type"])
+	require.JSONEq(t, `{"input":"dir"}`, requireResponsesClientToolValue[string](t, call["arguments"]))
+}
+
 func requireResponsesClientToolValue[T any](t *testing.T, value any) T {
 	t.Helper()
 	typed, ok := value.(T)

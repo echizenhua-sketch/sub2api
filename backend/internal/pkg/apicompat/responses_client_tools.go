@@ -112,6 +112,40 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 			lowered = append(lowered, raw)
 		}
 	}
+	// Codex Desktop can carry client-only history items (tool_search_*,
+	// custom_tool_*) even when the current turn no longer declares those tools.
+	// Upstreams that only understand function tools reject those item variants,
+	// so lower them unconditionally and re-declare the tools they reference.
+	historySearch, historyCustomNames := collectClientToolHistoryNames(req["input"])
+	if historySearch && !adapter.ToolSearch {
+		adapter.ToolSearch = true
+		if functionNames[toolSearchProxyName] || customNames[toolSearchProxyName] {
+			return ResponsesClientToolMapping{}, false, fmt.Errorf("built-in tool_search conflicts with a declared tool named %q; this upstream cannot disambiguate them, rename the tool", toolSearchProxyName)
+		}
+		if _, exists := adapter.NamespaceTools[toolSearchProxyName]; exists {
+			return ResponsesClientToolMapping{}, false, fmt.Errorf("built-in tool_search conflicts with namespace tool flattened as %q; this upstream cannot disambiguate them, rename the tool", toolSearchProxyName)
+		}
+		if !seenSearch {
+			lowered = append(lowered, map[string]any{
+				"type": "function", "name": toolSearchProxyName,
+				"description": "Search and load Codex tools, plugins, connectors, and MCP namespaces for the current task.",
+				"parameters":  json.RawMessage(toolSearchProxySchema),
+			})
+			seenSearch = true
+			changed = true
+		}
+	}
+	for _, name := range historyCustomNames {
+		if adapter.CustomTools[name] || functionNames[name] {
+			continue
+		}
+		adapter.CustomTools[name] = true
+		lowered = append(lowered, map[string]any{
+			"type": "function", "name": name,
+			"parameters": json.RawMessage(customToolInputSchema),
+		})
+		changed = true
+	}
 	if changed {
 		req["tools"] = lowered
 	}
@@ -128,6 +162,40 @@ func AdaptResponsesClientTools(req map[string]any) (ResponsesClientToolMapping, 
 		adapter.NamespaceTools = nil
 	}
 	return adapter, changed, nil
+}
+
+// collectClientToolHistoryNames reports whether the request history contains
+// tool_search_* items and which custom tool names it references. Used to lower
+// history items whose tools are no longer declared in the current turn.
+func collectClientToolHistoryNames(value any) (bool, []string) {
+	search := false
+	seen := make(map[string]bool)
+	names := make([]string, 0)
+	var visit func(any)
+	visit = func(value any) {
+		switch typed := value.(type) {
+		case []any:
+			for _, item := range typed {
+				visit(item)
+			}
+		case map[string]any:
+			switch strings.TrimSpace(stringValue(typed["type"])) {
+			case "tool_search_call", "tool_search_output":
+				search = true
+			case "custom_tool_call":
+				name := strings.TrimSpace(stringValue(typed["name"]))
+				if name != "" && !seen[name] {
+					seen[name] = true
+					names = append(names, name)
+				}
+			}
+			for _, child := range typed {
+				visit(child)
+			}
+		}
+	}
+	visit(value)
+	return search, names
 }
 
 func copyClientTool(tool map[string]any) map[string]any {
@@ -162,19 +230,16 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) bo
 				normalizeClientToolOutput(typed)
 				changed = true
 			case "tool_search_call":
-				if adapter.ToolSearch {
-					typed["type"] = "function_call"
-					typed["name"] = toolSearchProxyName
-					typed["arguments"] = rawObjectString(typed["arguments"])
-					delete(typed, "execution")
-					changed = true
-				}
+				typed["type"] = "function_call"
+				typed["name"] = toolSearchProxyName
+				typed["arguments"] = rawObjectString(typed["arguments"])
+				delete(typed, "execution")
+				changed = true
 			case "tool_search_output":
-				if adapter.ToolSearch {
-					typed["type"] = "function_call_output"
-					normalizeClientToolOutput(typed)
-					changed = true
-				}
+				typed["type"] = "function_call_output"
+				normalizeClientToolOutput(typed)
+				delete(typed, "execution")
+				changed = true
 			}
 			for _, child := range typed {
 				visit(child)
@@ -186,7 +251,25 @@ func rewriteClientToolHistory(value any, adapter *ResponsesClientToolMapping) bo
 }
 
 func normalizeClientToolOutput(item map[string]any) {
+	// Codex Desktop emits tool_search_output with a `tools` array instead of an
+	// `output` string. Promote it so the lowered function_call_output is valid,
+	// and drop the client-only status field the upstream rejects.
 	output, exists := item["output"]
+	if !exists || output == nil {
+		if tools, ok := item["tools"]; ok {
+			encoded, err := json.Marshal(tools)
+			if err != nil {
+				item["output"] = ""
+			} else {
+				item["output"] = string(encoded)
+			}
+			delete(item, "tools")
+			delete(item, "status")
+			return
+		}
+	}
+	delete(item, "tools")
+	delete(item, "status")
 	if !exists {
 		return
 	}

@@ -195,7 +195,23 @@ func (s *OpenAIGatewayService) shouldFailoverGrokUpstreamError(statusCode int, r
 	if isGrokContentPolicyRejection(statusCode, responseBody) {
 		return false
 	}
+	if isGrokModelInputRejection(statusCode, responseBody) {
+		return true
+	}
 	return s.shouldFailoverUpstreamError(statusCode)
+}
+
+// isGrokModelInputRejection identifies xAI's 422 body-deserialization refusal
+// ("untagged enum ModelInput"). It is not account-scoped, but it is sticky per
+// account for a given conversation, so failing over lets another account serve
+// the same payload instead of returning 502 to the client.
+func isGrokModelInputRejection(statusCode int, responseBody []byte) bool {
+	if statusCode != http.StatusUnprocessableEntity || len(responseBody) == 0 {
+		return false
+	}
+	lower := strings.ToLower(string(responseBody))
+	return strings.Contains(lower, "modelinput") &&
+		strings.Contains(lower, "failed to deserialize")
 }
 
 // applyGrokForbiddenPolicy applies an administrator's existing temporary

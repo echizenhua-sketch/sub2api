@@ -122,6 +122,23 @@ func TestGrokContentPolicy403DoesNotMutateOrFailover(t *testing.T) {
 	require.Zero(t, repo.tempUnschedCalls)
 }
 
+// xAI returns 422 "untagged enum ModelInput" for payload shapes it cannot
+// deserialize. It is sticky per account for a conversation, so it must fail over
+// instead of surfacing 502 from a single account.
+func TestGrokModelInput422FailsOver(t *testing.T) {
+	svc := &OpenAIGatewayService{accountRepo: &grokQuotaAccountRepo{}}
+	body := []byte(`{"error":"Failed to deserialize the JSON body into the target type: data did not match any variant of untagged enum ModelInput"}`)
+
+	require.True(t, isGrokModelInputRejection(http.StatusUnprocessableEntity, body))
+	require.True(t, svc.shouldFailoverGrokUpstreamError(http.StatusUnprocessableEntity, body))
+
+	// Unrelated 422s keep the previous non-failover behaviour.
+	other := []byte(`{"error":"validation failed: max_tokens too large"}`)
+	require.False(t, isGrokModelInputRejection(http.StatusUnprocessableEntity, other))
+	require.False(t, svc.shouldFailoverGrokUpstreamError(http.StatusUnprocessableEntity, other))
+	require.False(t, isGrokModelInputRejection(http.StatusBadRequest, body))
+}
+
 func TestGrokContentPolicy403SharedErrorFallbackDoesNotMutate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"error":{"code":"content_filter","message":"prohibited content"}}`)
