@@ -247,3 +247,69 @@ func TestSanitizeOpenAIResponsesToolParameterTypes_RewriteCountIndependentOfHits
 		return true
 	})
 }
+func TestSanitizeOpenAIResponsesEmptyNamespaceDescriptions_ReplacesEmptyDescriptions(t *testing.T) {
+	body := []byte(`{
+		"tools": [
+			{"type":"namespace","name":"top","description":"","tools":[
+				{"type":"function","name":"top_fn","description":"","parameters":{"type":"object"}}
+			]},
+			{"type":"namespace","name":"kept","description":"Keep this namespace","tools":[]}
+		],
+		"input": [
+			{
+				"type":"additional_tools","role":"developer","tools":[
+					{"type":"namespace","name":"functions","description":" \t\n ","tools":[
+						{"type":"function","name":"inner","description":"","parameters":{"type":"object"}}
+					]}
+				]
+			}
+		]
+	}`)
+
+	sanitized, changed, err := sanitizeOpenAIResponsesEmptyNamespaceDescriptions(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "Available tools.", gjson.GetBytes(sanitized, "tools.0.description").String())
+	require.Equal(t, "Available tools.", gjson.GetBytes(sanitized, "input.0.tools.0.description").String())
+	require.Equal(t, "Keep this namespace", gjson.GetBytes(sanitized, "tools.1.description").String())
+	require.Equal(t, "top", gjson.GetBytes(sanitized, "tools.0.name").String())
+	require.Equal(t, "functions", gjson.GetBytes(sanitized, "input.0.tools.0.name").String())
+	require.Equal(t, "top_fn", gjson.GetBytes(sanitized, "tools.0.tools.0.name").String())
+	require.Equal(t, "inner", gjson.GetBytes(sanitized, "input.0.tools.0.tools.0.name").String())
+	var decoded any
+	require.NoError(t, json.Unmarshal(sanitized, &decoded))
+}
+
+func TestSanitizeOpenAIResponsesEmptyNamespaceDescriptions_DoesNotRemoveFunctionDescription(t *testing.T) {
+	body := []byte(`{"tools":[
+		{"type":"function","name":"fn","description":"","parameters":{"type":"object"}},
+		{"type":"namespace","name":"ns","description":"namespace","tools":[]}
+	]}`)
+
+	sanitized, changed, err := sanitizeOpenAIResponsesEmptyNamespaceDescriptions(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Equal(t, string(body), string(sanitized))
+	require.True(t, gjson.GetBytes(sanitized, "tools.0.description").Exists())
+}
+
+func TestSanitizeOpenAIResponsesEmptyNamespaceDescriptions_NoMatchIsUnchanged(t *testing.T) {
+	cases := []string{
+		``,
+		`{"input":"hi"}`,
+		`{"tools":null}`,
+		`{"tools":[{"type":"function","name":"fn"}]}`,
+		`{"tools":[{"type":"namespace","name":"ns","description":"ok","tools":[]}]}`,
+	}
+
+	for _, body := range cases {
+		t.Run(body, func(t *testing.T) {
+			sanitized, changed, err := sanitizeOpenAIResponsesEmptyNamespaceDescriptions([]byte(body))
+			require.NoError(t, err)
+			require.False(t, changed)
+			require.Equal(t, body, string(sanitized))
+		})
+	}
+}

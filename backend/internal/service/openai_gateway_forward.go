@@ -57,6 +57,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if toolSchemaSanitized {
 		body = sanitizedToolBody
 	}
+	sanitizedNamespaceBody, namespaceSanitized, namespaceErr := sanitizeOpenAIResponsesEmptyNamespaceDescriptions(body)
+	if namespaceErr != nil {
+		return nil, fmt.Errorf("sanitize OpenAI Responses namespace descriptions: %w", namespaceErr)
+	}
+	if namespaceSanitized {
+		body = sanitizedNamespaceBody
+	}
 	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
 		liteBody, changed, liteErr := normalizeOpenAIResponsesLiteToolsPayload(body)
 		if liteErr != nil {

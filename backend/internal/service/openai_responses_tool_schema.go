@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"sort"
+	"strings"
 
 	"github.com/tidwall/gjson"
 )
@@ -16,6 +17,8 @@ const (
 	openAIResponsesToolSchemaFallbackType = `"object"`
 	// 显式 null 在 JSON 里只有这一种字面量形态。
 	openAIResponsesToolSchemaNullLiteral = "null"
+	// OpenAI requires namespace descriptions to be non-empty.
+	openAIResponsesToolSchemaFallbackNamespaceDescription = `"Available tools."`
 )
 
 // openAIResponsesToolSchemaNullType 记录一处待修正的 null，用原始 body 上的
@@ -74,6 +77,88 @@ func sanitizeOpenAIResponsesToolParameterTypes(body []byte) ([]byte, bool, error
 	}
 	sanitized = append(sanitized, body[cursor:]...)
 	return sanitized, true, nil
+}
+
+type openAIResponsesToolSchemaReplacement struct {
+	offset int
+	length int
+}
+
+// sanitizeOpenAIResponsesEmptyNamespaceDescriptions replaces empty descriptions
+// on Responses namespace tools. OpenAI requires this field to be a non-empty
+// string, while Codex CLI can emit an empty value for the built-in functions namespace.
+func sanitizeOpenAIResponsesEmptyNamespaceDescriptions(body []byte) ([]byte, bool, error) {
+	if len(body) == 0 {
+		return body, false, nil
+	}
+
+	hits := make([]openAIResponsesToolSchemaReplacement, 0, 2)
+	collectOpenAIResponsesEmptyNamespaceDescriptions(body, gjson.GetBytes(body, "tools"), 0, &hits)
+	if input := gjson.GetBytes(body, "input"); input.IsArray() {
+		input.ForEach(func(_, item gjson.Result) bool {
+			if item.IsObject() {
+				collectOpenAIResponsesEmptyNamespaceDescriptions(body, item.Get("tools"), 0, &hits)
+			}
+			return true
+		})
+	}
+	if len(hits) == 0 {
+		return body, false, nil
+	}
+
+	sort.Slice(hits, func(i, j int) bool { return hits[i].offset < hits[j].offset })
+	sanitized := make([]byte, 0, len(body)+len(hits)*len(openAIResponsesToolSchemaFallbackNamespaceDescription))
+	cursor := 0
+	for _, hit := range hits {
+		if hit.offset < cursor {
+			continue
+		}
+		sanitized = append(sanitized, body[cursor:hit.offset]...)
+		sanitized = append(sanitized, openAIResponsesToolSchemaFallbackNamespaceDescription...)
+		cursor = hit.offset + hit.length
+	}
+	sanitized = append(sanitized, body[cursor:]...)
+	return sanitized, true, nil
+}
+
+func collectOpenAIResponsesEmptyNamespaceDescriptions(
+	body []byte, tools gjson.Result, depth int, hits *[]openAIResponsesToolSchemaReplacement,
+) {
+	if depth > openAIResponsesToolSchemaMaxDepth || !tools.IsArray() {
+		return
+	}
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		if !tool.IsObject() {
+			return true
+		}
+		if tool.Get("type").String() == "namespace" {
+			description := tool.Get("description")
+			if description.Type == gjson.String && strings.TrimSpace(description.String()) == "" {
+				appendOpenAIResponsesEmptyNamespaceDescription(body, tool, description, hits)
+			}
+		}
+		collectOpenAIResponsesEmptyNamespaceDescriptions(body, tool.Get("tools"), depth+1, hits)
+		return true
+	})
+}
+
+func appendOpenAIResponsesEmptyNamespaceDescription(
+	body []byte, tool, description gjson.Result, hits *[]openAIResponsesToolSchemaReplacement,
+) {
+	if tool.Index <= 0 || description.Index <= 0 || description.Raw == "" {
+		return
+	}
+	objectStart := tool.Index
+	objectEnd := objectStart + len(tool.Raw)
+	valueStart := description.Index
+	valueEnd := valueStart + len(description.Raw)
+	if objectEnd > len(body) || valueStart < objectStart || valueEnd > objectEnd {
+		return
+	}
+	*hits = append(*hits, openAIResponsesToolSchemaReplacement{
+		offset: valueStart,
+		length: valueEnd - valueStart,
+	})
 }
 
 // collectOpenAIResponsesToolSchemaNullTypes 收集一个 tools 数组里所有需要修正的
