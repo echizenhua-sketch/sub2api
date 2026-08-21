@@ -1,10 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestNeedsToolContinuationSignals(t *testing.T) {
@@ -289,4 +292,111 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 			require.Equal(t, tt.coversAllIDs, coverage.ContextCoversAllCallIDs, "ContextCoversAllCallIDs")
 		})
 	}
+}
+
+func TestRewriteOpenAIHTTPContinuationRequest_ReplaysPreviousOutputWithoutForgingReferences(t *testing.T) {
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_previous",
+		AccountID:  42,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"reasoning","id":"rs_previous","encrypted_content":"opaque"}`),
+			json.RawMessage(`{"type":"function_call","id":"fc_item_a","call_id":"call_a","name":"first","arguments":"{}"}`),
+			json.RawMessage(`{"type":"custom_tool_call","id":"ctc_item_b","call_id":"call_b","name":"exec","input":"pwd"}`),
+			json.RawMessage(`{"type":"tool_search_call","id":"tsc_item_c","call_id":"call_c","arguments":{"query":"git"}}`),
+			json.RawMessage(`{"type":"mcp_tool_call","id":"mcp_item_d","call_id":"call_d","name":"list"}`),
+		},
+	}
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"previous_response_id":"resp_previous",
+		"input":[
+			{"type":"function_call_output","call_id":"call_a","output":"a"},
+			{"type":"custom_tool_call_output","call_id":"call_b","output":"b"},
+			{"type":"tool_search_output","call_id":"call_c","output":"c"},
+			{"type":"mcp_tool_call_output","call_id":"call_d","output":"d"}
+		]
+	}`)
+
+	rewritten, err := RewriteOpenAIHTTPContinuationRequest(body, state)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(rewritten, "previous_response_id").Exists())
+	require.Len(t, gjson.GetBytes(rewritten, "input").Array(), 9)
+	require.Equal(t, "fc_item_a", gjson.GetBytes(rewritten, "input.1.id").String())
+	require.Equal(t, "call_a", gjson.GetBytes(rewritten, "input.1.call_id").String())
+	require.NotEqual(t, gjson.GetBytes(rewritten, "input.1.id").String(), gjson.GetBytes(rewritten, "input.1.call_id").String(), "item id must not be synthesized from call_id")
+	require.False(t, gjson.GetBytes(rewritten, `input.#(type=="item_reference")`).Exists(), "replay must preserve real prior items instead of forging item_reference ids")
+}
+
+func TestRewriteOpenAIHTTPContinuationRequest_RejectsMissingParallelToolContext(t *testing.T) {
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_previous",
+		AccountID:  42,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_item_a","call_id":"call_a","name":"first","arguments":"{}"}`),
+		},
+	}
+	body := []byte(`{
+		"model":"gpt-5.6-sol",
+		"previous_response_id":"resp_previous",
+		"input":[
+			{"type":"function_call_output","call_id":"call_a","output":"a"},
+			{"type":"function_call_output","call_id":"call_missing","output":"missing"}
+		]
+	}`)
+
+	_, err := RewriteOpenAIHTTPContinuationRequest(body, state)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "call_missing")
+}
+
+func TestExtractOpenAIResponseReplayInput_CoversTerminalAndOutputItemEvents(t *testing.T) {
+	terminal := []byte(`{"type":"response.completed","response":{"id":"resp_1","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"one","arguments":"{}"},{"type":"message","id":"msg_1","role":"assistant","content":[]}]}}`)
+	items := ExtractOpenAIResponseReplayInput(terminal)
+	require.Len(t, items, 2)
+	require.Equal(t, "fc_1", gjson.GetBytes(items[0], "id").String())
+	require.Equal(t, "msg_1", gjson.GetBytes(items[1], "id").String())
+
+	itemDone := []byte(`{"type":"response.output_item.done","item":{"type":"custom_tool_call","id":"ctc_1","call_id":"call_custom","name":"exec","input":"pwd"}}`)
+	items = ExtractOpenAIResponseReplayInput(itemDone)
+	require.Len(t, items, 1)
+	require.Equal(t, "ctc_1", gjson.GetBytes(items[0], "id").String())
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_ExplicitAndImplicitRecovery(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 9, APIKeyID: 90, UserID: 900}
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_prepare",
+		AccountID:  77,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_prepare","call_id":"call_prepare","name":"lookup","arguments":"{}"}`),
+		},
+	}
+	store.BindResponseContinuation(scope, "session_prepare", state, time.Minute)
+
+	explicitBody := []byte(`{"model":"gpt-5.6-sol","previous_response_id":"resp_prepare","input":[{"type":"function_call_output","call_id":"call_prepare","output":"ok"}]}`)
+	explicit, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "session_prepare", explicitBody)
+	require.NoError(t, err)
+	require.True(t, explicit.Replayed)
+	require.Equal(t, "resp_prepare", explicit.RoutingResponseID)
+	require.Equal(t, int64(77), explicit.AccountID)
+	require.False(t, gjson.GetBytes(explicit.Body, "previous_response_id").Exists())
+
+	implicitBody := []byte(`{"model":"gpt-5.6-sol","input":[{"type":"function_call_output","call_id":"call_prepare","output":"ok"}]}`)
+	implicit, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "session_prepare", implicitBody)
+	require.NoError(t, err)
+	require.True(t, implicit.Replayed)
+	require.Equal(t, "resp_prepare", implicit.RoutingResponseID)
+	require.Equal(t, int64(77), implicit.AccountID)
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_MissingOrWrongScopeFailsClosed(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	scope := OpenAIResponseContinuationScope{GroupID: 9, APIKeyID: 90, UserID: 900}
+	body := []byte(`{"model":"gpt-5.6-sol","previous_response_id":"resp_missing","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}]}`)
+
+	_, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "session_missing", body)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "previous_response_id context was not found")
 }

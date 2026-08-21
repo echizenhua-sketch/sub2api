@@ -367,6 +367,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
+	var replayInput []json.RawMessage
 	imageCount := 0
 	var imageOutputSizes []string
 	if reqStream {
@@ -377,6 +378,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		usage = result.usage
 		firstTokenMs = result.firstTokenMs
 		responseID = strings.TrimSpace(result.responseID)
+		replayInput = result.replayInput
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 	} else {
@@ -386,10 +388,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		usage = result.usage
 		responseID = strings.TrimSpace(result.responseID)
+		replayInput = result.replayInput
 		imageCount = result.imageCount
 		imageOutputSizes = result.imageOutputSizes
 	}
 	s.bindHTTPResponseAccount(ctx, c, account, responseID)
+	s.bindHTTPResponseContinuation(c.Request.Context(), account, responseID, replayInput)
 
 	// 排除 spark 影子:其 codex_* 仅由 QueryUsage(/wham/usage bengalfox)更新(外审第7轮 P1)。
 	if !account.IsShadow() {
@@ -896,6 +900,7 @@ type openaiStreamingResultPassthrough struct {
 	usage            *OpenAIUsage
 	firstTokenMs     *int
 	responseID       string
+	replayInput      []json.RawMessage
 	imageCount       int
 	imageOutputSizes []string
 }
@@ -904,6 +909,7 @@ type openaiNonStreamingResultPassthrough struct {
 	*OpenAIUsage
 	usage            *OpenAIUsage
 	responseID       string
+	replayInput      []json.RawMessage
 	imageCount       int
 	imageOutputSizes []string
 }
@@ -1487,6 +1493,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
+	replayCollector := &openAIResponseReplayCollector{}
 	clientDisconnected := false
 	sawDone := false
 	sawTerminalEvent := false
@@ -1536,6 +1543,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			usage:            usage,
 			firstTokenMs:     firstTokenMs,
 			responseID:       responseID,
+			replayInput:      replayCollector.Items(),
 			imageCount:       imageCounter.Count(),
 			imageOutputSizes: imageCounter.Sizes(),
 		}
@@ -1653,6 +1661,7 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthrough(
 			if responseID == "" {
 				responseID = extractOpenAIResponseIDFromJSONBytes(dataBytes)
 			}
+			replayCollector.AddPayload(dataBytes)
 			imageCounter.AddSSEData(dataBytes)
 			if sanitizedData, sanitized := sanitizeOpenAIResponseFailedEventForClient(
 				dataBytes,
@@ -1831,6 +1840,7 @@ func (s *OpenAIGatewayService) handleNonStreamingResponsePassthrough(
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		replayInput:      ExtractOpenAIResponseReplayInput(body),
 		imageCount:       countOpenAIResponseImageOutputsFromJSONBytes(body),
 		imageOutputSizes: collectOpenAIResponseImageOutputSizesFromJSONBytes(body),
 	}, nil
@@ -1903,6 +1913,7 @@ func (s *OpenAIGatewayService) handlePassthroughSSEToJSON(resp *http.Response, c
 		OpenAIUsage:      usage,
 		usage:            usage,
 		responseID:       extractOpenAIResponseIDFromJSONBytes(body),
+		replayInput:      ExtractOpenAIResponseReplayInput(body),
 		imageCount:       countOpenAIImageOutputsFromSSEBody(bodyText),
 		imageOutputSizes: collectOpenAIImageOutputSizesFromSSEBody(bodyText),
 	}, nil

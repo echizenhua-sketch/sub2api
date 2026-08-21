@@ -392,11 +392,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id must be a response.id (resp_*), not a message id")
 			return
 		}
-		reqLog.Warn("openai.request_validation_failed",
-			zap.String("reason", "previous_response_id_requires_wsv2"),
-		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "previous_response_id is only supported on Responses WebSocket v2")
-		return
 	}
 
 	setOpsRequestContext(c, reqModel, reqStream)
@@ -435,6 +430,44 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			defer imageReleaseFunc()
 		}
 	}
+
+	// Resolve HTTP continuation before channel mapping and account selection.
+	// The original body remains the session-hash source so replayed history does
+	// not perturb sticky routing on later turns.
+	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
+	groupID := int64(0)
+	if apiKey.GroupID != nil {
+		groupID = *apiKey.GroupID
+	}
+	continuationScope := service.OpenAIResponseContinuationScope{
+		GroupID:  groupID,
+		APIKeyID: apiKey.ID,
+		UserID:   subject.UserID,
+	}
+	c.Request = c.Request.WithContext(service.WithOpenAIHTTPContinuationContext(
+		c.Request.Context(),
+		continuationScope,
+		sessionHash,
+	))
+	continuation, continuationErr := h.gatewayService.PrepareOpenAIHTTPContinuationRequest(
+		c.Request.Context(),
+		continuationScope,
+		sessionHash,
+		body,
+	)
+	if continuationErr != nil {
+		reqLog.Warn("openai.request_validation_failed",
+			zap.String("reason", "http_continuation_context_invalid"),
+			zap.Error(continuationErr),
+		)
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", continuationErr.Error())
+		return
+	}
+	body = continuation.Body
+	if continuation.RoutingResponseID != "" {
+		previousResponseID = continuation.RoutingResponseID
+	}
+	continuationAccountID := continuation.AccountID
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
@@ -487,8 +520,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		return
 	}
 
-	// Generate session hash (header first; fallback to prompt_cache_key)
-	sessionHash := h.gatewayService.GenerateSessionHash(c, sessionHashBody)
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
@@ -592,6 +623,14 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			zap.Float64("load_skew", scheduleDecision.LoadSkew),
 		)
 		account := selection.Account
+		if continuationAccountID > 0 && account.ID != continuationAccountID {
+			reqLog.Warn("openai.http_continuation_account_mismatch",
+				zap.Int64("expected_account_id", continuationAccountID),
+				zap.Int64("selected_account_id", account.ID),
+			)
+			h.handleStreamingAwareError(c, http.StatusBadRequest, "invalid_request_error", "previous response account is unavailable for this continuation", streamStarted)
+			return
+		}
 		sessionHash = ensureOpenAIPoolModeSessionHash(sessionHash, account)
 		reqLog.Debug("openai.account_selected", zap.Int64("account_id", account.ID), zap.String("account_name", account.Name))
 		setOpsSelectedAccount(c, account.ID, account.Platform)
@@ -1420,17 +1459,12 @@ func (h *OpenAIGatewayHandler) ensureAnthropicErrorResponse(c *gin.Context, stre
 }
 
 func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context, body []byte, reqLog *zap.Logger) bool {
-	if !gjson.GetBytes(body, `input.#(type=="function_call_output")`).Exists() {
-		return true
-	}
-
 	validation := service.ValidateFunctionCallOutputContextBytes(body)
 	if !validation.HasFunctionCallOutput {
 		return true
 	}
 
-	previousResponseID := gjson.GetBytes(body, "previous_response_id").String()
-	if strings.TrimSpace(previousResponseID) != "" || validation.HasToolCallContext {
+	if validation.HasToolCallContext || validation.HasItemReference {
 		return true
 	}
 
@@ -1438,17 +1472,14 @@ func (h *OpenAIGatewayHandler) validateFunctionCallOutputRequest(c *gin.Context,
 		reqLog.Warn("openai.request_validation_failed",
 			zap.String("reason", "function_call_output_missing_call_id"),
 		)
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2")
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "tool call output requires a non-empty call_id")
 		return false
-	}
-	if validation.HasItemReferenceForAllCallIDs {
-		return true
 	}
 
 	reqLog.Warn("openai.request_validation_failed",
-		zap.String("reason", "function_call_output_missing_item_reference"),
+		zap.String("reason", "tool_call_output_missing_context"),
 	)
-	h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "function_call_output requires item_reference ids matching each call_id on HTTP requests; continuation via previous_response_id is only supported on Responses WebSocket v2")
+	h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", "tool call output requires prior tool call context")
 	return false
 }
 

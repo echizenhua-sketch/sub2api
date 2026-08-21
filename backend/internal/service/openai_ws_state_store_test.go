@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -253,4 +254,35 @@ func TestWithOpenAIWSStateStoreRedisTimeout_WithParentContext(t *testing.T) {
 	require.NotNil(t, ctx)
 	_, ok := ctx.Deadline()
 	require.True(t, ok, "应附加短超时")
+}
+
+func TestOpenAIResponseStateStore_HTTPContinuationScopeAndSessionIsolation(t *testing.T) {
+	store := NewOpenAIResponseStateStore(nil)
+	scope := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 101, UserID: 1001}
+	otherAPIKey := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 102, UserID: 1001}
+	otherUser := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 101, UserID: 1002}
+	otherGroup := OpenAIResponseContinuationScope{GroupID: 8, APIKeyID: 101, UserID: 1001}
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_scoped",
+		AccountID:  501,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_real","call_id":"call_1","name":"one","arguments":"{}"}`),
+		},
+	}
+
+	store.BindResponseContinuation(scope, "session_hash", state, time.Minute)
+
+	byResponse, ok := store.GetResponseContinuation(scope, "resp_scoped")
+	require.True(t, ok)
+	require.Equal(t, int64(501), byResponse.AccountID)
+	bySession, ok := store.GetSessionContinuation(scope, "session_hash")
+	require.True(t, ok)
+	require.Equal(t, "resp_scoped", bySession.ResponseID)
+
+	for _, isolated := range []OpenAIResponseContinuationScope{otherAPIKey, otherUser, otherGroup} {
+		_, ok = store.GetResponseContinuation(isolated, "resp_scoped")
+		require.False(t, ok)
+		_, ok = store.GetSessionContinuation(isolated, "session_hash")
+		require.False(t, ok)
+	}
 }

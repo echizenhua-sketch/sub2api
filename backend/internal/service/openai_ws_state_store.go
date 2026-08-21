@@ -39,13 +39,18 @@ type openAIWSSessionConnBinding struct {
 	expiresAt time.Time
 }
 
-// OpenAIWSStateStore 管理 WSv2 的粘连状态。
+type openAIResponseContinuationBinding struct {
+	state     OpenAIResponseContinuation
+	expiresAt time.Time
+}
+
+// OpenAIResponseStateStore 管理跨 HTTP/WS Responses 传输共用的续链状态。
 // - response_id -> account_id 用于续链路由
 // - response_id -> conn_id 用于连接内上下文复用
 //
 // response_id -> account_id 优先走 GatewayCache（Redis），同时维护本地热缓存。
 // response_id -> conn_id 仅在本进程内有效。
-type OpenAIWSStateStore interface {
+type OpenAIResponseStateStore interface {
 	BindResponseAccount(ctx context.Context, groupID int64, responseID string, accountID int64, ttl time.Duration) error
 	GetResponseAccount(ctx context.Context, groupID int64, responseID string) (int64, error)
 	DeleteResponseAccount(ctx context.Context, groupID int64, responseID string) error
@@ -61,34 +66,50 @@ type OpenAIWSStateStore interface {
 	BindSessionConn(groupID int64, sessionHash, connID string, ttl time.Duration)
 	GetSessionConn(groupID int64, sessionHash string) (string, bool)
 	DeleteSessionConn(groupID int64, sessionHash string)
+
+	BindResponseContinuation(scope OpenAIResponseContinuationScope, sessionHash string, state OpenAIResponseContinuation, ttl time.Duration)
+	GetResponseContinuation(scope OpenAIResponseContinuationScope, responseID string) (OpenAIResponseContinuation, bool)
+	GetSessionContinuation(scope OpenAIResponseContinuationScope, sessionHash string) (OpenAIResponseContinuation, bool)
 }
+
+// OpenAIWSStateStore remains as a compatibility alias for existing WS callers.
+type OpenAIWSStateStore = OpenAIResponseStateStore
 
 type defaultOpenAIWSStateStore struct {
 	cache GatewayCache
 
-	responseToAccountMu  sync.RWMutex
-	responseToAccount    map[string]openAIWSAccountBinding
-	responseToConnMu     sync.RWMutex
-	responseToConn       map[string]openAIWSConnBinding
-	sessionToTurnStateMu sync.RWMutex
-	sessionToTurnState   map[string]openAIWSTurnStateBinding
-	sessionToConnMu      sync.RWMutex
-	sessionToConn        map[string]openAIWSSessionConnBinding
+	responseToAccountMu   sync.RWMutex
+	responseToAccount     map[string]openAIWSAccountBinding
+	responseToConnMu      sync.RWMutex
+	responseToConn        map[string]openAIWSConnBinding
+	sessionToTurnStateMu  sync.RWMutex
+	sessionToTurnState    map[string]openAIWSTurnStateBinding
+	sessionToConnMu       sync.RWMutex
+	sessionToConn         map[string]openAIWSSessionConnBinding
+	continuationMu        sync.RWMutex
+	responseContinuations map[string]openAIResponseContinuationBinding
+	sessionContinuations  map[string]openAIResponseContinuationBinding
 
 	lastCleanupUnixNano atomic.Int64
 }
 
 // NewOpenAIWSStateStore 创建默认 WS 状态存储。
-func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
+func NewOpenAIResponseStateStore(cache GatewayCache) OpenAIResponseStateStore {
 	store := &defaultOpenAIWSStateStore{
-		cache:              cache,
-		responseToAccount:  make(map[string]openAIWSAccountBinding, 256),
-		responseToConn:     make(map[string]openAIWSConnBinding, 256),
-		sessionToTurnState: make(map[string]openAIWSTurnStateBinding, 256),
-		sessionToConn:      make(map[string]openAIWSSessionConnBinding, 256),
+		cache:                 cache,
+		responseToAccount:     make(map[string]openAIWSAccountBinding, 256),
+		responseToConn:        make(map[string]openAIWSConnBinding, 256),
+		sessionToTurnState:    make(map[string]openAIWSTurnStateBinding, 256),
+		sessionToConn:         make(map[string]openAIWSSessionConnBinding, 256),
+		responseContinuations: make(map[string]openAIResponseContinuationBinding, 256),
+		sessionContinuations:  make(map[string]openAIResponseContinuationBinding, 256),
 	}
 	store.lastCleanupUnixNano.Store(time.Now().UnixNano())
 	return store
+}
+
+func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
+	return NewOpenAIResponseStateStore(cache)
 }
 
 func (s *defaultOpenAIWSStateStore) BindResponseAccount(ctx context.Context, groupID int64, responseID string, accountID int64, ttl time.Duration) error {
@@ -301,6 +322,65 @@ func (s *defaultOpenAIWSStateStore) DeleteSessionConn(groupID int64, sessionHash
 	s.sessionToConnMu.Unlock()
 }
 
+func (s *defaultOpenAIWSStateStore) BindResponseContinuation(scope OpenAIResponseContinuationScope, sessionHash string, state OpenAIResponseContinuation, ttl time.Duration) {
+	if !scope.valid() || state.AccountID <= 0 || len(state.ReplayInput) == 0 {
+		return
+	}
+	state.ResponseID = strings.TrimSpace(state.ResponseID)
+	state.ReplayInput = cloneOpenAIReplayInput(state.ReplayInput)
+	if len(state.ReplayInput) == 0 {
+		return
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	s.maybeCleanup()
+	binding := openAIResponseContinuationBinding{state: state, expiresAt: time.Now().Add(ttl)}
+
+	s.continuationMu.Lock()
+	if state.ResponseID != "" {
+		key := openAIResponseContinuationKey(scope, state.ResponseID)
+		ensureBindingCapacity(s.responseContinuations, key, openAIWSStateStoreMaxEntriesPerMap)
+		s.responseContinuations[key] = binding
+	}
+	if key := openAISessionContinuationKey(scope, sessionHash); key != "" {
+		ensureBindingCapacity(s.sessionContinuations, key, openAIWSStateStoreMaxEntriesPerMap)
+		s.sessionContinuations[key] = binding
+	}
+	s.continuationMu.Unlock()
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseContinuation(scope OpenAIResponseContinuationScope, responseID string) (OpenAIResponseContinuation, bool) {
+	if !scope.valid() || strings.TrimSpace(responseID) == "" {
+		return OpenAIResponseContinuation{}, false
+	}
+	s.maybeCleanup()
+	return s.getResponseContinuation(openAIResponseContinuationKey(scope, responseID))
+}
+
+func (s *defaultOpenAIWSStateStore) GetSessionContinuation(scope OpenAIResponseContinuationScope, sessionHash string) (OpenAIResponseContinuation, bool) {
+	key := openAISessionContinuationKey(scope, sessionHash)
+	if key == "" {
+		return OpenAIResponseContinuation{}, false
+	}
+	s.maybeCleanup()
+	return s.getResponseContinuation(key)
+}
+
+func (s *defaultOpenAIWSStateStore) getResponseContinuation(key string) (OpenAIResponseContinuation, bool) {
+	now := time.Now()
+	s.continuationMu.RLock()
+	binding, ok := s.responseContinuations[key]
+	if !ok {
+		binding, ok = s.sessionContinuations[key]
+	}
+	s.continuationMu.RUnlock()
+	if !ok || !now.Before(binding.expiresAt) {
+		return OpenAIResponseContinuation{}, false
+	}
+	state := binding.state
+	state.ReplayInput = cloneOpenAIReplayInput(state.ReplayInput)
+	return state, true
+}
+
 func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	if s == nil {
 		return
@@ -330,6 +410,11 @@ func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	s.sessionToConnMu.Lock()
 	cleanupExpiredSessionConnBindings(s.sessionToConn, now, openAIWSStateStoreCleanupMaxPerMap)
 	s.sessionToConnMu.Unlock()
+
+	s.continuationMu.Lock()
+	cleanupExpiredResponseContinuationBindings(s.responseContinuations, now, openAIWSStateStoreCleanupMaxPerMap)
+	cleanupExpiredResponseContinuationBindings(s.sessionContinuations, now, openAIWSStateStoreCleanupMaxPerMap)
+	s.continuationMu.Unlock()
 }
 
 func cleanupExpiredAccountBindings(bindings map[string]openAIWSAccountBinding, now time.Time, maxScan int) {
@@ -396,6 +481,22 @@ func cleanupExpiredSessionConnBindings(bindings map[string]openAIWSSessionConnBi
 	}
 }
 
+func cleanupExpiredResponseContinuationBindings(bindings map[string]openAIResponseContinuationBinding, now time.Time, maxScan int) {
+	if len(bindings) == 0 || maxScan <= 0 {
+		return
+	}
+	scanned := 0
+	for key, binding := range bindings {
+		if now.After(binding.expiresAt) {
+			delete(bindings, key)
+		}
+		scanned++
+		if scanned >= maxScan {
+			break
+		}
+	}
+}
+
 func ensureBindingCapacity[T any](bindings map[string]T, incomingKey string, maxEntries int) {
 	if len(bindings) < maxEntries || maxEntries <= 0 {
 		return
@@ -437,6 +538,22 @@ func openAIWSSessionTurnStateKey(groupID int64, sessionHash string) string {
 		return ""
 	}
 	return fmt.Sprintf("%d:%s", groupID, hash)
+}
+
+func openAIResponseContinuationScopeKey(scope OpenAIResponseContinuationScope) string {
+	return fmt.Sprintf("%d:%d:%d", scope.GroupID, scope.APIKeyID, scope.UserID)
+}
+
+func openAIResponseContinuationKey(scope OpenAIResponseContinuationScope, responseID string) string {
+	return "response:" + openAIResponseContinuationScopeKey(scope) + ":" + strings.TrimSpace(responseID)
+}
+
+func openAISessionContinuationKey(scope OpenAIResponseContinuationScope, sessionHash string) string {
+	hash := strings.TrimSpace(sessionHash)
+	if !scope.valid() || hash == "" {
+		return ""
+	}
+	return "session:" + openAIResponseContinuationScopeKey(scope) + ":" + hash
 }
 
 func withOpenAIWSStateStoreRedisTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

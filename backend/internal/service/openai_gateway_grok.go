@@ -195,6 +195,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	var usage *OpenAIUsage
 	var firstTokenMs *int
 	responseID := ""
+	var replayInput []json.RawMessage
 	searchCount := 0
 	imageCount := 0
 	var imageOutputSizes []string
@@ -214,6 +215,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		usage = streamResult.usage
 		firstTokenMs = streamResult.firstTokenMs
 		responseID = strings.TrimSpace(streamResult.responseID)
+		replayInput = streamResult.replayInput
 		searchCount = streamResult.searchCount
 		imageCount = streamResult.imageCount
 		imageOutputSizes = streamResult.imageOutputSizes
@@ -224,10 +226,13 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		}
 		usage = nonStreamResult.usage
 		responseID = strings.TrimSpace(nonStreamResult.responseID)
+		replayInput = nonStreamResult.replayInput
 		searchCount = nonStreamResult.searchCount
 		imageCount = nonStreamResult.imageCount
 		imageOutputSizes = nonStreamResult.imageOutputSizes
 	}
+	s.bindHTTPResponseAccount(ctx, c, account, responseID)
+	s.bindHTTPResponseContinuation(c.Request.Context(), account, responseID, replayInput)
 
 	if usage == nil {
 		usage = &OpenAIUsage{}

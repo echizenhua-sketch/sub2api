@@ -1,6 +1,8 @@
 package service
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/tidwall/gjson"
@@ -21,7 +23,27 @@ type FunctionCallOutputValidation struct {
 	HasFunctionCallOutput              bool
 	HasToolCallContext                 bool
 	HasFunctionCallOutputMissingCallID bool
+	HasItemReference                   bool
 	HasItemReferenceForAllCallIDs      bool
+}
+
+// OpenAIResponseContinuationScope isolates HTTP continuation state between tenants.
+type OpenAIResponseContinuationScope struct {
+	GroupID  int64
+	APIKeyID int64
+	UserID   int64
+}
+
+func (s OpenAIResponseContinuationScope) valid() bool {
+	return s.APIKeyID > 0 && s.UserID > 0
+}
+
+// OpenAIResponseContinuation contains the real output items needed to replay a
+// previous Responses turn without treating call_id as an item id.
+type OpenAIResponseContinuation struct {
+	ResponseID  string
+	AccountID   int64
+	ReplayInput []json.RawMessage
 }
 
 func isCodexToolCallContextItemType(typ string) bool {
@@ -190,6 +212,7 @@ func ValidateFunctionCallOutputContextBytes(body []byte) FunctionCallOutputValid
 				result.HasToolCallContext = true
 			}
 		case itemType == "item_reference":
+			result.HasItemReference = true
 			idValue := strings.TrimSpace(item.Get("id").String())
 			if idValue == "" {
 				return true
@@ -213,6 +236,194 @@ func ValidateFunctionCallOutputContextBytes(body []byte) FunctionCallOutputValid
 	}
 	result.HasItemReferenceForAllCallIDs = allReferenced
 	return result
+}
+
+// RewriteOpenAIHTTPContinuationRequest replaces previous_response_id with the
+// actual prior output items. This keeps HTTP forwarding stateless from the
+// upstream's perspective and preserves the distinct item id and call_id fields.
+func RewriteOpenAIHTTPContinuationRequest(body []byte, state OpenAIResponseContinuation) ([]byte, error) {
+	if len(body) == 0 || !json.Valid(body) {
+		return nil, fmt.Errorf("invalid Responses request body")
+	}
+	if len(state.ReplayInput) == 0 {
+		return nil, fmt.Errorf("previous_response_id context has no replayable output")
+	}
+
+	var request map[string]json.RawMessage
+	if err := json.Unmarshal(body, &request); err != nil {
+		return nil, fmt.Errorf("decode Responses request: %w", err)
+	}
+	current, err := decodeOpenAIContinuationInput(request["input"])
+	if err != nil {
+		return nil, err
+	}
+
+	replay := cloneOpenAIReplayInput(state.ReplayInput)
+	contextCallIDs := make(map[string]struct{})
+	for _, item := range replay {
+		if callID := openAIContinuationContextCallID(item); callID != "" {
+			contextCallIDs[callID] = struct{}{}
+		}
+	}
+	for _, item := range current {
+		if callID := openAIContinuationContextCallID(item); callID != "" {
+			contextCallIDs[callID] = struct{}{}
+		}
+	}
+	for _, item := range current {
+		itemType := strings.TrimSpace(gjson.GetBytes(item, "type").String())
+		if !isCodexToolCallOutputItemType(itemType) {
+			continue
+		}
+		callID := strings.TrimSpace(gjson.GetBytes(item, "call_id").String())
+		if callID == "" {
+			return nil, fmt.Errorf("%s requires a non-empty call_id", itemType)
+		}
+		if _, ok := contextCallIDs[callID]; !ok {
+			return nil, fmt.Errorf("previous response context does not contain tool call %s", callID)
+		}
+	}
+
+	seenIDs := make(map[string]struct{}, len(current))
+	for _, item := range current {
+		if id := strings.TrimSpace(gjson.GetBytes(item, "id").String()); id != "" {
+			seenIDs[id] = struct{}{}
+		}
+	}
+	combined := make([]json.RawMessage, 0, len(replay)+len(current))
+	for _, item := range replay {
+		id := strings.TrimSpace(gjson.GetBytes(item, "id").String())
+		if id != "" {
+			if _, exists := seenIDs[id]; exists {
+				continue
+			}
+			seenIDs[id] = struct{}{}
+		}
+		combined = append(combined, append(json.RawMessage(nil), item...))
+	}
+	combined = append(combined, current...)
+	encodedInput, err := json.Marshal(combined)
+	if err != nil {
+		return nil, fmt.Errorf("encode continuation input: %w", err)
+	}
+	request["input"] = encodedInput
+	delete(request, "previous_response_id")
+	rewritten, err := json.Marshal(request)
+	if err != nil {
+		return nil, fmt.Errorf("encode Responses continuation request: %w", err)
+	}
+	return rewritten, nil
+}
+
+func decodeOpenAIContinuationInput(raw json.RawMessage) ([]json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, nil
+	}
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err == nil {
+		return items, nil
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return nil, fmt.Errorf("Responses continuation input must be a string or array")
+	}
+	message, err := json.Marshal(map[string]any{
+		"type":    "message",
+		"role":    "user",
+		"content": []any{map[string]any{"type": "input_text", "text": text}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return []json.RawMessage{message}, nil
+}
+
+func openAIContinuationContextCallID(item json.RawMessage) string {
+	itemType := strings.TrimSpace(gjson.GetBytes(item, "type").String())
+	if !isCodexToolCallContextItemType(itemType) {
+		return ""
+	}
+	return strings.TrimSpace(gjson.GetBytes(item, "call_id").String())
+}
+
+// ExtractOpenAIResponseReplayInput reads complete output arrays and individual
+// output_item events. The caller may feed every SSE payload to a collector.
+func ExtractOpenAIResponseReplayInput(payload []byte) []json.RawMessage {
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return nil
+	}
+	for _, path := range []string{"output", "response.output"} {
+		output := gjson.GetBytes(payload, path)
+		if !output.IsArray() {
+			continue
+		}
+		items := make([]json.RawMessage, 0, len(output.Array()))
+		for _, item := range output.Array() {
+			if item.IsObject() {
+				items = append(items, json.RawMessage(append([]byte(nil), item.Raw...)))
+			}
+		}
+		if len(items) > 0 {
+			return items
+		}
+	}
+	item := gjson.GetBytes(payload, "item")
+	if item.IsObject() {
+		return []json.RawMessage{json.RawMessage(append([]byte(nil), item.Raw...))}
+	}
+	return nil
+}
+
+type openAIResponseReplayCollector struct {
+	items []json.RawMessage
+	index map[string]int
+}
+
+func (c *openAIResponseReplayCollector) AddPayload(payload []byte) {
+	for _, item := range ExtractOpenAIResponseReplayInput(payload) {
+		key := openAIReplayItemKey(item)
+		if key != "" {
+			if c.index == nil {
+				c.index = make(map[string]int)
+			}
+			if index, ok := c.index[key]; ok {
+				c.items[index] = append(json.RawMessage(nil), item...)
+				continue
+			}
+			c.index[key] = len(c.items)
+		}
+		c.items = append(c.items, append(json.RawMessage(nil), item...))
+	}
+}
+
+func (c *openAIResponseReplayCollector) Items() []json.RawMessage {
+	return cloneOpenAIReplayInput(c.items)
+}
+
+func openAIReplayItemKey(item json.RawMessage) string {
+	if id := strings.TrimSpace(gjson.GetBytes(item, "id").String()); id != "" {
+		return "id:" + id
+	}
+	typ := strings.TrimSpace(gjson.GetBytes(item, "type").String())
+	callID := strings.TrimSpace(gjson.GetBytes(item, "call_id").String())
+	if typ != "" && callID != "" {
+		return "call:" + typ + ":" + callID
+	}
+	return ""
+}
+
+func cloneOpenAIReplayInput(items []json.RawMessage) []json.RawMessage {
+	if len(items) == 0 {
+		return nil
+	}
+	cloned := make([]json.RawMessage, 0, len(items))
+	for _, item := range items {
+		if len(item) == 0 || !json.Valid(item) {
+			continue
+		}
+		cloned = append(cloned, append(json.RawMessage(nil), item...))
+	}
+	return cloned
 }
 
 // ToolCallOutputContextCoverage 描述 input 中工具输出与可重建上下文的覆盖关系，
@@ -350,6 +561,7 @@ func ValidateFunctionCallOutputContext(reqBody map[string]any) FunctionCallOutpu
 			}
 			callIDs[callID] = struct{}{}
 		case itemType == "item_reference":
+			result.HasItemReference = true
 			idValue, _ := itemMap["id"].(string)
 			idValue = strings.TrimSpace(idValue)
 			if idValue == "" {
