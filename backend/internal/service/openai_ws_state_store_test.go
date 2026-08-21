@@ -278,11 +278,119 @@ func TestOpenAIResponseStateStore_HTTPContinuationScopeAndSessionIsolation(t *te
 	bySession, ok := store.GetSessionContinuation(scope, "session_hash")
 	require.True(t, ok)
 	require.Equal(t, "resp_scoped", bySession.ResponseID)
+	byCallID, ok, err := store.GetCallIDContinuation(scope, []string{"call_1"})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "resp_scoped", byCallID.ResponseID)
 
 	for _, isolated := range []OpenAIResponseContinuationScope{otherAPIKey, otherUser, otherGroup} {
 		_, ok = store.GetResponseContinuation(isolated, "resp_scoped")
 		require.False(t, ok)
 		_, ok = store.GetSessionContinuation(isolated, "session_hash")
 		require.False(t, ok)
+		_, ok, err = store.GetCallIDContinuation(isolated, []string{"call_1"})
+		require.NoError(t, err)
+		require.False(t, ok)
 	}
+}
+
+func TestOpenAIResponseStateStore_CallIDContinuationExpiresAndCleansUp(t *testing.T) {
+	raw := NewOpenAIResponseStateStore(nil)
+	store, ok := raw.(*defaultOpenAIWSStateStore)
+	require.True(t, ok)
+	scope := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 101, UserID: 1001}
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_expired",
+		AccountID:  501,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_expired","call_id":"call_expired","name":"one","arguments":"{}"}`),
+		},
+	}
+	store.BindResponseContinuation(scope, "session_expired", state, time.Minute)
+
+	key := openAICallIDContinuationKey(scope, "call_expired")
+	store.continuationMu.Lock()
+	binding := store.callIDContinuations[key]
+	binding.expiresAt = time.Now().Add(-time.Second)
+	store.callIDContinuations[key] = binding
+	store.continuationMu.Unlock()
+	store.lastCleanupUnixNano.Store(time.Now().Add(-2 * openAIWSStateStoreCleanupInterval).UnixNano())
+
+	_, found, err := store.GetCallIDContinuation(scope, []string{"call_expired"})
+	require.NoError(t, err)
+	require.False(t, found)
+	store.continuationMu.RLock()
+	_, retained := store.callIDContinuations[key]
+	store.continuationMu.RUnlock()
+	require.False(t, retained)
+}
+
+func TestOpenAIResponseStateStore_AmbiguousCallIDRemainsClosedUntilExpiry(t *testing.T) {
+	raw := NewOpenAIResponseStateStore(nil)
+	store, ok := raw.(*defaultOpenAIWSStateStore)
+	require.True(t, ok)
+	scope := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 101, UserID: 1001}
+	stateFor := func(responseID string, accountID int64) OpenAIResponseContinuation {
+		return OpenAIResponseContinuation{
+			ResponseID: responseID,
+			AccountID:  accountID,
+			ReplayInput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_shared","call_id":"call_shared","name":"one","arguments":"{}"}`),
+			},
+		}
+	}
+	store.BindResponseContinuation(scope, "session_first", stateFor("resp_first", 501), time.Minute)
+	store.BindResponseContinuation(scope, "session_second", stateFor("resp_second", 502), time.Minute)
+
+	_, found, err := store.GetCallIDContinuation(scope, []string{"call_shared"})
+	require.ErrorContains(t, err, "ambiguous")
+	require.False(t, found)
+
+	key := openAICallIDContinuationKey(scope, "call_shared")
+	store.continuationMu.Lock()
+	binding := store.callIDContinuations[key]
+	binding.expiresAt = time.Now().Add(-time.Second)
+	store.callIDContinuations[key] = binding
+	store.continuationMu.Unlock()
+	store.BindResponseContinuation(scope, "session_third", stateFor("resp_third", 503), time.Minute)
+
+	resolved, found, err := store.GetCallIDContinuation(scope, []string{"call_shared"})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "resp_third", resolved.ResponseID)
+	require.Equal(t, int64(503), resolved.AccountID)
+}
+
+func TestOpenAIResponseStateStore_CallIDContinuationCapacityIsBounded(t *testing.T) {
+	raw := NewOpenAIResponseStateStore(nil)
+	store, ok := raw.(*defaultOpenAIWSStateStore)
+	require.True(t, ok)
+	scope := OpenAIResponseContinuationScope{GroupID: 7, APIKeyID: 101, UserID: 1001}
+	expiresAt := time.Now().Add(time.Hour)
+	placeholder := openAIResponseContinuationBinding{
+		state:     OpenAIResponseContinuation{ResponseID: "resp_existing", AccountID: 501},
+		expiresAt: expiresAt,
+	}
+
+	store.continuationMu.Lock()
+	for i := 0; i < openAIWSStateStoreMaxEntriesPerMap; i++ {
+		store.callIDContinuations[fmt.Sprintf("existing:%d", i)] = placeholder
+	}
+	store.continuationMu.Unlock()
+
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_incoming",
+		AccountID:  502,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_incoming","call_id":"call_incoming","name":"one","arguments":"{}"}`),
+		},
+	}
+	store.BindResponseContinuation(scope, "session_incoming", state, time.Minute)
+
+	store.continuationMu.RLock()
+	count := len(store.callIDContinuations)
+	_, retained := store.callIDContinuations[openAICallIDContinuationKey(scope, "call_incoming")]
+	store.continuationMu.RUnlock()
+	require.Equal(t, openAIWSStateStoreMaxEntriesPerMap, count)
+	require.True(t, retained)
 }
