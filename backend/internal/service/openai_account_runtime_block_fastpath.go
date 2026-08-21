@@ -55,6 +55,11 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	if s != nil {
 		scheduleOllamaCloudUsageActivity(s.deferredService, account)
 	}
+	// Capacity shedding describes this request, not account health. Keep the
+	// account schedulable while the request-local retry budget handles recovery.
+	if account != nil && account.Platform == PlatformOpenAI && isOpenAIRequestScopedCapacityShed("", responseBody) {
+		return false
+	}
 	stateCtx, cancel := openAIAccountStateContext(ctx)
 	defer cancel()
 
@@ -96,6 +101,16 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	shouldDisable := s.rateLimitService.HandleUpstreamError(stateCtx, account, statusCode, headers, responseBody)
 	modelTempMatched := statusCode != http.StatusUnauthorized && tempUnschedulableModel(stateCtx, nil) != "" &&
 		len(matchTempUnschedulableRules(statusCode, responseBody, s.rateLimitService.effectiveTempUnschedulableRules(stateCtx, account))) > 0
+	openAIModelTransientScope := account.Platform == PlatformOpenAI &&
+		account.Type == AccountTypeAPIKey &&
+		!account.IsCustomErrorCodesEnabled() &&
+		!modelTempMatched &&
+		shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody)
+	if openAIModelTransientScope {
+		// Preserve account-level handling for custom rules, while isolating
+		// ordinary recoverable OpenAI API Key 5xx failures by model.
+		shouldDisable = false
+	}
 	if shouldDisable && !modelTempMatched {
 		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 	}
@@ -103,8 +118,7 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamError(ctx context.Cont
 	// same-account retry budget. Recording the generic account+model transient
 	// cooldown here would block the next approved retry before that budget is used.
 	poolModeRetryable := account.IsPoolMode() && account.IsPoolModeRetryableStatus(statusCode)
-	if !shouldDisable && account.Platform == PlatformOpenAI && account.Type == AccountTypeAPIKey &&
-		shouldCooldownOpenAITransientUpstreamError(statusCode, responseBody) && !poolModeRetryable {
+	if openAIModelTransientScope && !poolModeRetryable {
 		model := ""
 		if len(canonicalModel) > 0 {
 			model = canonicalModel[0]
