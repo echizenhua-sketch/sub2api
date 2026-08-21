@@ -391,6 +391,124 @@ func TestPrepareOpenAIHTTPContinuationRequest_ExplicitAndImplicitRecovery(t *tes
 	require.Equal(t, int64(77), implicit.AccountID)
 }
 
+func TestPrepareOpenAIHTTPContinuationRequest_RecoversByCallIDWhenSessionChanges(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 8, UserID: 1}
+	state := OpenAIResponseContinuation{
+		ResponseID: "resp_vscode",
+		AccountID:  15932,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_vscode","call_id":"call_vscode","name":"lookup","arguments":"{}"}`),
+		},
+	}
+	store.BindResponseContinuation(scope, "first_turn_content_hash", state, time.Minute)
+
+	body := []byte(`{"model":"grok-4.5-con","input":[{"type":"function_call_output","call_id":"call_vscode","output":"ok"}]}`)
+	prepared, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "second_turn_content_hash", body)
+	require.NoError(t, err)
+	require.True(t, prepared.Replayed)
+	require.Equal(t, "resp_vscode", prepared.RoutingResponseID)
+	require.Equal(t, int64(15932), prepared.AccountID)
+	require.Equal(t, "fc_vscode", gjson.GetBytes(prepared.Body, "input.0.id").String())
+	require.Equal(t, "call_vscode", gjson.GetBytes(prepared.Body, "input.1.call_id").String())
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_ParallelCallIDsMustResolveSameResponse(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 8, UserID: 1}
+	store.BindResponseContinuation(scope, "session_a", OpenAIResponseContinuation{
+		ResponseID: "resp_a",
+		AccountID:  100,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_a","call_id":"call_a","name":"first","arguments":"{}"}`),
+		},
+	}, time.Minute)
+	store.BindResponseContinuation(scope, "session_b", OpenAIResponseContinuation{
+		ResponseID: "resp_b",
+		AccountID:  200,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_b","call_id":"call_b","name":"second","arguments":"{}"}`),
+		},
+	}, time.Minute)
+
+	body := []byte(`{"model":"grok-4.5-con","input":[{"type":"function_call_output","call_id":"call_a","output":"a"},{"type":"function_call_output","call_id":"call_b","output":"b"}]}`)
+	_, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "unrelated_session", body)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "different prior responses")
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_ParallelCallIDsRecoverSameResponse(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 8, UserID: 1}
+	store.BindResponseContinuation(scope, "first_turn_hash", OpenAIResponseContinuation{
+		ResponseID: "resp_parallel",
+		AccountID:  15932,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_a","call_id":"call_a","name":"first","arguments":"{}"}`),
+			json.RawMessage(`{"type":"custom_tool_call","id":"ctc_b","call_id":"call_b","name":"second","input":"pwd"}`),
+		},
+	}, time.Minute)
+
+	body := []byte(`{"model":"grok-4.5-con","input":[{"type":"function_call_output","call_id":"call_a","output":"a"},{"type":"custom_tool_call_output","call_id":"call_b","output":"b"}]}`)
+	prepared, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "second_turn_hash", body)
+	require.NoError(t, err)
+	require.True(t, prepared.Replayed)
+	require.Equal(t, "resp_parallel", prepared.RoutingResponseID)
+	require.Equal(t, int64(15932), prepared.AccountID)
+	require.Len(t, gjson.GetBytes(prepared.Body, "input").Array(), 4)
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_DuplicateCallIDFailsClosed(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 8, UserID: 1}
+	for _, state := range []OpenAIResponseContinuation{
+		{
+			ResponseID: "resp_first",
+			AccountID:  100,
+			ReplayInput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_first","call_id":"call_reused","name":"first","arguments":"{}"}`),
+			},
+		},
+		{
+			ResponseID: "resp_second",
+			AccountID:  200,
+			ReplayInput: []json.RawMessage{
+				json.RawMessage(`{"type":"function_call","id":"fc_second","call_id":"call_reused","name":"second","arguments":"{}"}`),
+			},
+		},
+	} {
+		store.BindResponseContinuation(scope, state.ResponseID, state, time.Minute)
+	}
+
+	body := []byte(`{"model":"grok-4.5-con","input":[{"type":"function_call_output","call_id":"call_reused","output":"ok"}]}`)
+	_, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), scope, "unrelated_session", body)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous")
+}
+
+func TestPrepareOpenAIHTTPContinuationRequest_CallIDDoesNotCrossScope(t *testing.T) {
+	svc := &OpenAIGatewayService{}
+	store := svc.getOpenAIWSStateStore()
+	scope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 8, UserID: 1}
+	store.BindResponseContinuation(scope, "session", OpenAIResponseContinuation{
+		ResponseID: "resp_scoped_call",
+		AccountID:  15932,
+		ReplayInput: []json.RawMessage{
+			json.RawMessage(`{"type":"function_call","id":"fc_scoped","call_id":"call_scoped","name":"lookup","arguments":"{}"}`),
+		},
+	}, time.Minute)
+
+	body := []byte(`{"model":"grok-4.5-con","input":[{"type":"function_call_output","call_id":"call_scoped","output":"ok"}]}`)
+	wrongScope := OpenAIResponseContinuationScope{GroupID: 10, APIKeyID: 9, UserID: 1}
+	_, err := svc.PrepareOpenAIHTTPContinuationRequest(context.Background(), wrongScope, "unrelated_session", body)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "prior response context was not found")
+}
+
 func TestPrepareOpenAIHTTPContinuationRequest_MissingOrWrongScopeFailsClosed(t *testing.T) {
 	svc := &OpenAIGatewayService{}
 	scope := OpenAIResponseContinuationScope{GroupID: 9, APIKeyID: 90, UserID: 900}

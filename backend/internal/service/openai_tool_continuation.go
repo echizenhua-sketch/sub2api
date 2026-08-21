@@ -238,6 +238,35 @@ func ValidateFunctionCallOutputContextBytes(body []byte) FunctionCallOutputValid
 	return result
 }
 
+func functionCallOutputCallIDsBytes(body []byte) []string {
+	if len(body) == 0 {
+		return nil
+	}
+	input := parseRawJSONView(body).Get("input")
+	if !input.IsArray() {
+		return nil
+	}
+
+	var callIDs []string
+	seen := make(map[string]struct{})
+	input.ForEach(func(_, item gjson.Result) bool {
+		if !item.IsObject() || !isCodexToolCallOutputItemType(item.Get("type").String()) {
+			return true
+		}
+		callID := strings.TrimSpace(item.Get("call_id").String())
+		if callID == "" {
+			return true
+		}
+		if _, exists := seen[callID]; exists {
+			return true
+		}
+		seen[callID] = struct{}{}
+		callIDs = append(callIDs, callID)
+		return true
+	})
+	return callIDs
+}
+
 // RewriteOpenAIHTTPContinuationRequest replaces previous_response_id with the
 // actual prior output items. This keeps HTTP forwarding stateless from the
 // upstream's perspective and preserves the distinct item id and call_id fields.

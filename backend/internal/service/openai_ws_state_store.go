@@ -42,6 +42,7 @@ type openAIWSSessionConnBinding struct {
 type openAIResponseContinuationBinding struct {
 	state     OpenAIResponseContinuation
 	expiresAt time.Time
+	ambiguous bool
 }
 
 // OpenAIResponseStateStore 管理跨 HTTP/WS Responses 传输共用的续链状态。
@@ -70,6 +71,7 @@ type OpenAIResponseStateStore interface {
 	BindResponseContinuation(scope OpenAIResponseContinuationScope, sessionHash string, state OpenAIResponseContinuation, ttl time.Duration)
 	GetResponseContinuation(scope OpenAIResponseContinuationScope, responseID string) (OpenAIResponseContinuation, bool)
 	GetSessionContinuation(scope OpenAIResponseContinuationScope, sessionHash string) (OpenAIResponseContinuation, bool)
+	GetCallIDContinuation(scope OpenAIResponseContinuationScope, callIDs []string) (OpenAIResponseContinuation, bool, error)
 }
 
 // OpenAIWSStateStore remains as a compatibility alias for existing WS callers.
@@ -89,6 +91,7 @@ type defaultOpenAIWSStateStore struct {
 	continuationMu        sync.RWMutex
 	responseContinuations map[string]openAIResponseContinuationBinding
 	sessionContinuations  map[string]openAIResponseContinuationBinding
+	callIDContinuations   map[string]openAIResponseContinuationBinding
 
 	lastCleanupUnixNano atomic.Int64
 }
@@ -103,6 +106,7 @@ func NewOpenAIResponseStateStore(cache GatewayCache) OpenAIResponseStateStore {
 		sessionToConn:         make(map[string]openAIWSSessionConnBinding, 256),
 		responseContinuations: make(map[string]openAIResponseContinuationBinding, 256),
 		sessionContinuations:  make(map[string]openAIResponseContinuationBinding, 256),
+		callIDContinuations:   make(map[string]openAIResponseContinuationBinding, 256),
 	}
 	store.lastCleanupUnixNano.Store(time.Now().UnixNano())
 	return store
@@ -345,6 +349,27 @@ func (s *defaultOpenAIWSStateStore) BindResponseContinuation(scope OpenAIRespons
 		ensureBindingCapacity(s.sessionContinuations, key, openAIWSStateStoreMaxEntriesPerMap)
 		s.sessionContinuations[key] = binding
 	}
+	if state.ResponseID != "" {
+		now := time.Now()
+		for _, item := range state.ReplayInput {
+			callID := openAIContinuationContextCallID(item)
+			if callID == "" {
+				continue
+			}
+			key := openAICallIDContinuationKey(scope, callID)
+			ensureBindingCapacity(s.callIDContinuations, key, openAIWSStateStoreMaxEntriesPerMap)
+			next := binding
+			if existing, exists := s.callIDContinuations[key]; exists && now.Before(existing.expiresAt) {
+				if existing.ambiguous || !sameOpenAIResponseContinuation(existing.state, state) {
+					next.ambiguous = true
+					if existing.expiresAt.After(next.expiresAt) {
+						next.expiresAt = existing.expiresAt
+					}
+				}
+			}
+			s.callIDContinuations[key] = next
+		}
+	}
 	s.continuationMu.Unlock()
 }
 
@@ -363,6 +388,63 @@ func (s *defaultOpenAIWSStateStore) GetSessionContinuation(scope OpenAIResponseC
 	}
 	s.maybeCleanup()
 	return s.getResponseContinuation(key)
+}
+
+func (s *defaultOpenAIWSStateStore) GetCallIDContinuation(scope OpenAIResponseContinuationScope, callIDs []string) (OpenAIResponseContinuation, bool, error) {
+	if !scope.valid() || len(callIDs) == 0 {
+		return OpenAIResponseContinuation{}, false, nil
+	}
+	s.maybeCleanup()
+
+	now := time.Now()
+	seen := make(map[string]struct{}, len(callIDs))
+	found := 0
+	missing := 0
+	var selected OpenAIResponseContinuation
+
+	s.continuationMu.RLock()
+	for _, rawCallID := range callIDs {
+		callID := strings.TrimSpace(rawCallID)
+		if callID == "" {
+			continue
+		}
+		if _, exists := seen[callID]; exists {
+			continue
+		}
+		seen[callID] = struct{}{}
+
+		binding, ok := s.callIDContinuations[openAICallIDContinuationKey(scope, callID)]
+		if !ok || !now.Before(binding.expiresAt) {
+			missing++
+			continue
+		}
+		if binding.ambiguous {
+			s.continuationMu.RUnlock()
+			return OpenAIResponseContinuation{}, false, fmt.Errorf("call_id continuation context is ambiguous")
+		}
+		if found == 0 {
+			selected = binding.state
+		} else if !sameOpenAIResponseContinuation(selected, binding.state) {
+			s.continuationMu.RUnlock()
+			return OpenAIResponseContinuation{}, false, fmt.Errorf("call_ids resolve to different prior responses")
+		}
+		found++
+	}
+	s.continuationMu.RUnlock()
+
+	if found == 0 {
+		return OpenAIResponseContinuation{}, false, nil
+	}
+	if missing > 0 {
+		return OpenAIResponseContinuation{}, false, fmt.Errorf("call_ids did not all resolve to prior response context")
+	}
+	selected.ReplayInput = cloneOpenAIReplayInput(selected.ReplayInput)
+	return selected, true, nil
+}
+
+func sameOpenAIResponseContinuation(a, b OpenAIResponseContinuation) bool {
+	return a.AccountID > 0 && a.AccountID == b.AccountID &&
+		strings.TrimSpace(a.ResponseID) != "" && strings.TrimSpace(a.ResponseID) == strings.TrimSpace(b.ResponseID)
 }
 
 func (s *defaultOpenAIWSStateStore) getResponseContinuation(key string) (OpenAIResponseContinuation, bool) {
@@ -414,6 +496,7 @@ func (s *defaultOpenAIWSStateStore) maybeCleanup() {
 	s.continuationMu.Lock()
 	cleanupExpiredResponseContinuationBindings(s.responseContinuations, now, openAIWSStateStoreCleanupMaxPerMap)
 	cleanupExpiredResponseContinuationBindings(s.sessionContinuations, now, openAIWSStateStoreCleanupMaxPerMap)
+	cleanupExpiredResponseContinuationBindings(s.callIDContinuations, now, openAIWSStateStoreCleanupMaxPerMap)
 	s.continuationMu.Unlock()
 }
 
@@ -554,6 +637,14 @@ func openAISessionContinuationKey(scope OpenAIResponseContinuationScope, session
 		return ""
 	}
 	return "session:" + openAIResponseContinuationScopeKey(scope) + ":" + hash
+}
+
+func openAICallIDContinuationKey(scope OpenAIResponseContinuationScope, callID string) string {
+	id := strings.TrimSpace(callID)
+	if !scope.valid() || id == "" {
+		return ""
+	}
+	return "call:" + openAIResponseContinuationScopeKey(scope) + ":" + id
 }
 
 func withOpenAIWSStateStoreRedisTimeout(ctx context.Context) (context.Context, context.CancelFunc) {

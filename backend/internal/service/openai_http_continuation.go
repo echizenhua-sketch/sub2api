@@ -79,7 +79,14 @@ func (s *OpenAIGatewayService) PrepareOpenAIHTTPContinuationRequest(
 			return result, fmt.Errorf("previous_response_id context was not found for this API key, user, and group")
 		}
 	} else {
-		state, ok = store.GetSessionContinuation(scope, sessionHash)
+		var lookupErr error
+		state, ok, lookupErr = store.GetCallIDContinuation(scope, functionCallOutputCallIDsBytes(body))
+		if lookupErr != nil {
+			return result, fmt.Errorf("function_call_output %w", lookupErr)
+		}
+		if !ok {
+			state, ok = store.GetSessionContinuation(scope, sessionHash)
+		}
 		if !ok {
 			return result, fmt.Errorf("function_call_output prior response context was not found for this API key, user, group, and session")
 		}
