@@ -31,6 +31,15 @@ const codexNamespaceRequestBody = `{
 
 const namespaceForwardOKResponse = `{"id":"resp_ns","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`
 
+const codexNamespaceHistoryOnlyRequestBody = `{
+	"model":"gpt-5.6-sol",
+	"stream":false,
+	"input":[
+		{"type":"function_call","namespace":"collaboration","name":"spawn_agent","call_id":"call_1","arguments":"{}"},
+		{"type":"function_call_output","call_id":"call_1","output":"ok"}
+	]
+}`
+
 // OAuth 出口即 namespace 扩展的定义方：声明必须原样送达，历史调用项必须保留
 // namespace（缺字段上游会 400 "Missing namespace for function_call"），而非调用项上的
 // 残留 namespace 仍要清掉。回归 issue #4978。
@@ -64,6 +73,27 @@ func TestOpenAIGatewayService_OAuthPreservesCodexNamespaceTools(t *testing.T) {
 
 	// 未摊平即无需回程还原，不得登记映射。
 	require.Empty(t, openAIResponsesNamespaceNames(c))
+}
+
+func TestOpenAIGatewayService_APIKeyExplicitPreserveKeepsHistoryNamespaceWithoutToolDeclaration(t *testing.T) {
+	body := []byte(codexNamespaceHistoryOnlyRequestBody)
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, namespaceForwardOKResponse),
+	}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	account := newOpenAIRejectedFieldTestAccount()
+	account.Extra["openai_responses_flatten_namespaces"] = false
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(), c, account, body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.bodies, 1)
+	forwarded := upstream.bodies[0]
+	require.Equal(t, "collaboration", gjson.GetBytes(forwarded, "input.0.namespace").String())
+	require.Equal(t, "spawn_agent", gjson.GetBytes(forwarded, "input.0.name").String())
 }
 
 // compact 端点 schema 更窄：input[].namespace 会 400 Unknown parameter（issue #4761），

@@ -23,6 +23,11 @@ func TestShouldFlattenOpenAIResponsesNamespaces(t *testing.T) {
 		Type:     AccountTypeAPIKey,
 		Extra:    map[string]any{"openai_responses_flatten_namespaces": true},
 	}
+	preserveAPIKey := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{"openai_responses_flatten_namespaces": false},
+	}
 
 	tests := []struct {
 		name               string
@@ -49,6 +54,7 @@ func TestShouldFlattenOpenAIResponsesNamespaces(t *testing.T) {
 		{name: "oauth_flatten_enabled_wsv2_passthrough", account: flattenOAuth, transport: OpenAIUpstreamTransportResponsesWebsocketV2, passthroughEnabled: true, want: true},
 		// API Key 也必须在 Responses HTTP 转发前摊平，避免与 input namespace 清理脱节。
 		{name: "apikey_flatten_enabled_http", account: flattenAPIKey, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
+		{name: "apikey_flatten_disabled_http", account: preserveAPIKey, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 		{name: "apikey_http", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		{name: "grok_oauth_http", account: grokOAuth, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 		{name: "nil_account", account: nil, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
@@ -70,6 +76,11 @@ func TestShouldKeepOpenAIResponsesToolCallNamespaces(t *testing.T) {
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Extra:    map[string]any{"openai_responses_flatten_namespaces": true},
+	}
+	preserveAPIKey := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{"openai_responses_flatten_namespaces": false},
 	}
 
 	tests := []struct {
@@ -94,6 +105,7 @@ func TestShouldKeepOpenAIResponsesToolCallNamespaces(t *testing.T) {
 		{name: "oauth_compact_wsv2_strips", account: oauth, transport: OpenAIUpstreamTransportResponsesWebsocketV2, compactPath: true, want: false},
 		// API Key 出口是标准 Responses API，不认识该字段。
 		{name: "apikey_strips", account: apiKey, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
+		{name: "apikey_explicit_preserve_keeps", account: preserveAPIKey, transport: OpenAIUpstreamTransportHTTPSSE, want: true},
 		{name: "setup_token_strips", account: setupToken, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 		{name: "nil_account", account: nil, transport: OpenAIUpstreamTransportHTTPSSE, want: false},
 	}
